@@ -53,6 +53,9 @@ pub struct TagSuggestion {
     /// The UTF-16 range of the prompt this replaces.
     pub from: u32,
     pub to: u32,
+    /// The alias the word matched, when it wasn't the tag itself: shown as "alias → tag".
+    #[uniffi(default = None)]
+    pub alias: Option<String>,
 }
 
 /// A prompt after a suggestion was inserted.
@@ -82,6 +85,7 @@ impl Generation {
                 count: suggestion.count,
                 from: byte_to_utf16(&text, suggestion.from),
                 to: byte_to_utf16(&text, suggestion.to),
+                alias: suggestion.alias,
             })
             .collect()
     }

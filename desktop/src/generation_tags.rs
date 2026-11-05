@@ -87,7 +87,11 @@ pub fn strip(
     let found = suggestions(generation, prompt, *caret);
     let mut x = at.x;
     for (i, suggestion) in found.iter().enumerate() {
-        let label = shortened(&suggestion.tag, MAX_TAG_CHARS);
+        // through an alias, it says which: "housecat → domestic cat"
+        let label = match &suggestion.alias {
+            Some(alias) => shortened(&format!("{alias} → {}", suggestion.tag), MAX_TAG_CHARS + 12),
+            None => shortened(&suggestion.tag, MAX_TAG_CHARS),
+        };
         let label_width = text_width(ui.painter(), &label, 14.0, Weight::Medium);
         let count_width = text_width(ui.painter(), &suggestion.count, 11.0, Weight::Regular);
         let chip_width = 21.0 + label_width + 8.0 + count_width + 14.0;

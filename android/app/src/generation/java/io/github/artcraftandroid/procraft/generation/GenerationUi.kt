@@ -586,6 +586,8 @@ object GenerationUi {
                 ) {
                     Box(Modifier.size(7.dp).clip(CircleShape).background(kindColour(t.kind)))
                     Spacer(Modifier.width(6.dp))
+                    // through an alias, it says which: "housecat → domestic cat"
+                    t.alias?.let { Text("$it → ", color = Dim, fontSize = 13.sp, maxLines = 1) }
                     Text(t.tag, color = Ink, fontSize = 13.sp, maxLines = 1)
                     Spacer(Modifier.width(6.dp))
                     Text(t.count, color = Dim, fontSize = 11.sp, maxLines = 1)

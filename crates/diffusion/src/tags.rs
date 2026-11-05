@@ -57,6 +57,9 @@ pub struct Suggestion {
     pub to: usize,
     pub source: Source,
     pub nsfw: bool,
+    /// The alias the typed word matched, when it matched one rather than the tag itself ("house
+    /// cat" for "domestic cat"), so the UIs can show why it's there.
+    pub alias: Option<String>,
 }
 
 /// What a prefix found: the range it covers and the suggestions, best first.
@@ -85,6 +88,8 @@ struct Tag {
 struct Key {
     key: String,
     tag: u32,
+    /// One of the tag's aliases rather than the tag itself.
+    alias: bool,
 }
 
 /// Every tag and alias, sorted by key.
@@ -177,11 +182,11 @@ impl Index {
         }
         let Ok(at) = u32::try_from(self.tags.len()) else { return };
         self.tags.push(Tag { tag: inserted(tag), key: key.clone(), kind, count, source, nsfw });
-        self.keys.push(Key { key, tag: at });
+        self.keys.push(Key { key, tag: at, alias: false });
         for alias in aliases {
             let key = normalise(alias);
             if !key.is_empty() {
-                self.keys.push(Key { key, tag: at });
+                self.keys.push(Key { key, tag: at, alias: true });
             }
         }
     }
@@ -232,7 +237,9 @@ impl Index {
             return Suggestions { from, to, items: Vec::new() };
         }
         let start = self.keys.partition_point(|key| key.key.as_str() < query.as_str());
-        let mut best: HashMap<&str, (f64, usize)> = HashMap::new();
+        // per tag, its best match: the lowest tier (an exact match, then the tag starting with
+        // the word, then one of its aliases starting with it), then the higher score
+        let mut best: HashMap<&str, Match> = HashMap::new();
         let tail = self.keys.get(start..).unwrap_or_default();
         for key in tail.iter().take_while(|key| key.key.starts_with(&query)) {
             let at = key.tag as usize;
@@ -240,31 +247,38 @@ impl Index {
             if tag.nsfw && !nsfw {
                 continue;
             }
-            let score = self.score(tag);
+            let tier = if key.key == query {
+                Tier::Exact
+            } else if key.alias {
+                Tier::Alias
+            } else {
+                Tier::Prefix
+            };
+            let found = Match { tier, score: self.score(tag), at, alias: key.alias.then(|| key.key.clone()) };
             match best.entry(tag.key.as_str()) {
                 MapEntry::Vacant(v) => {
-                    v.insert((score, at));
+                    v.insert(found);
                 }
                 MapEntry::Occupied(mut o) => {
-                    if score > o.get().0 {
-                        o.insert((score, at));
+                    if found.better_than(o.get()) {
+                        o.insert(found);
                     }
                 }
             }
         }
-        let mut found: Vec<(f64, usize)> = best.into_values().collect();
+        let mut found: Vec<Match> = best.into_values().collect();
         found.sort_unstable_by(|a, b| {
-            b.0.total_cmp(&a.0).then_with(|| {
-                let a = self.tags.get(a.1).map_or("", |t| t.tag.as_str());
-                let b = self.tags.get(b.1).map_or("", |t| t.tag.as_str());
+            a.tier.cmp(&b.tier).then_with(|| b.score.total_cmp(&a.score)).then_with(|| {
+                let a = self.tags.get(a.at).map_or("", |t| t.tag.as_str());
+                let b = self.tags.get(b.at).map_or("", |t| t.tag.as_str());
                 a.cmp(b)
             })
         });
         found.truncate(most);
         let items = found
             .into_iter()
-            .filter_map(|(_, at)| {
-                self.tags.get(at).map(|tag| Suggestion {
+            .filter_map(|m| {
+                self.tags.get(m.at).map(|tag| Suggestion {
                     tag: tag.tag.clone(),
                     kind: tag.kind,
                     count: count_label(tag.count),
@@ -272,10 +286,37 @@ impl Index {
                     to,
                     source: tag.source,
                     nsfw: tag.nsfw,
+                    // an exact alias ("houses" for "house") needs no explaining
+                    alias: m.alias.filter(|_| m.tier == Tier::Alias),
                 })
             })
             .collect();
         Suggestions { from, to, items }
+    }
+}
+
+/// How a typed word matched a tag; earlier tiers rank first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Tier {
+    /// The word is the tag, or one of its aliases, exactly.
+    Exact,
+    /// The tag starts with the word.
+    Prefix,
+    /// One of the tag's aliases starts with the word.
+    Alias,
+}
+
+/// A tag a word matched: how, its score, where it is, and the alias when through one.
+struct Match {
+    tier: Tier,
+    score: f64,
+    at: usize,
+    alias: Option<String>,
+}
+
+impl Match {
+    fn better_than(&self, other: &Match) -> bool {
+        self.tier < other.tier || (self.tier == other.tier && self.score > other.score)
     }
 }
 
@@ -410,7 +451,7 @@ mod tests {
     fn prefix_ranking_mixes_sources_and_keeps_the_higher_duplicate() {
         let found = sample().suggest("cat", 3, false, 12);
         let tags: Vec<&str> = found.items.iter().map(|s| s.tag.as_str()).collect();
-        assert_eq!(tags, ["caterpillar", "cat", "cathode"]);
+        assert_eq!(tags, ["cat", "caterpillar", "cathode"], "the word itself first");
         let cat = found.items.iter().find(|s| s.tag == "cat").unwrap();
         assert_eq!(cat.count, "100");
         assert_eq!(cat.source, Source::Danbooru);
@@ -420,6 +461,20 @@ mod tests {
     fn aliases_resolve_to_their_tag() {
         let found = sample().suggest("boo", 3, false, 12);
         assert_eq!(found.items.first().map(|s| s.tag.as_str()), Some("breasts"));
+    }
+
+    #[test]
+    fn the_word_itself_comes_first_then_tags_starting_with_it_then_aliases() {
+        let found = suggest("house", 5, false, 12);
+        let tags: Vec<&str> = found.items.iter().map(|s| s.tag.as_str()).collect();
+        assert_eq!(tags.first(), Some(&"house"), "{tags:?}");
+        assert!(found.items.iter().all(|s| s.alias.is_none()), "enough tags start with it: {tags:?}");
+        // fewer direct matches: an alias's tag comes after them, saying which alias it was
+        let found = suggest("housec", 6, false, 12);
+        let cat = found.items.iter().find(|s| s.tag == "domestic cat").unwrap();
+        assert_eq!(cat.alias.as_deref(), Some("housecat"));
+        let mount = suggest("mounta", 6, false, 12);
+        assert_eq!(mount.items.first().map(|s| s.tag.as_str()), Some("mountain"));
     }
 
     #[test]
@@ -464,8 +519,6 @@ mod tests {
     fn the_embedded_lists_load_and_find_tags() {
         let found = suggest("long_h", 6, false, 12);
         assert!(found.items.iter().any(|s| s.tag == "long hair"));
-        let found = suggest("boo", 3, false, 12);
-        assert!(found.items.iter().any(|s| s.tag == "breasts"));
         let found = suggest("^_", 2, false, 12);
         assert!(found.items.iter().any(|s| s.tag == "^_^"));
     }
@@ -482,7 +535,8 @@ mod tests {
         assert_eq!(text, "cat, dog, ");
 
         let middle = sample().suggest("cat, cat, cathode", 8, false, 12);
-        let (text, caret) = complete("cat, cat, cathode", 8, &middle.items[0]);
+        let caterpillar = middle.items.iter().find(|s| s.tag == "caterpillar").unwrap();
+        let (text, caret) = complete("cat, cat, cathode", 8, caterpillar);
         assert_eq!(text, "cat, caterpillar, cathode");
         assert_eq!(caret, "cat, caterpillar, ".len());
 
