@@ -131,6 +131,28 @@ impl Picture {
         Picture { width: self.width, height: self.height, rgba }
     }
 
+    /// A control image from a layer's pixels (`premultiplied` RGBA8, `width × height`): the
+    /// layer flattened onto white, its luminance inverted so dark strokes become white lines on
+    /// black, which is what the control models expect.
+    pub fn control(width: u32, height: u32, premultiplied: &[u8]) -> Result<Picture, Error> {
+        if width == 0 || height == 0 || premultiplied.len() as u64 != u64::from(width) * u64::from(height) * 4 {
+            return Err(Error::picture(format!(
+                "{} bytes aren't {width} × {height} control pixels",
+                premultiplied.len()
+            )));
+        }
+        let mut rgba = Vec::with_capacity(premultiplied.len());
+        for &[r, g, b, alpha] in premultiplied.as_chunks::<4>().0 {
+            // over white: a premultiplied channel plus what the uncovered part of white adds
+            let a = u32::from(alpha);
+            let over = |c: u8| (u32::from(c) + 255 - a).min(255);
+            let luma = (299 * over(r) + 587 * over(g) + 114 * over(b) + 500) / 1000;
+            let line = u8::try_from(255u32.saturating_sub(luma)).unwrap_or(255);
+            rgba.extend_from_slice(&[line, line, line, 255]);
+        }
+        Picture::new(width, height, rgba)
+    }
+
     fn image(&self) -> Result<RgbaImage, Error> {
         RgbaImage::from_raw(self.width, self.height, self.rgba.clone())
             .ok_or_else(|| Error::picture("pixels don't match the size"))
@@ -190,5 +212,14 @@ mod tests {
         assert_eq!(p.rgba, vec![255, 255, 255, 255]);
         let half = Picture::new(1, 1, vec![0, 0, 0, 128]).unwrap().flattened([255, 255, 255]);
         assert_eq!(half.rgba, vec![127, 127, 127, 255]);
+    }
+
+    #[test]
+    fn a_control_image_is_white_lines_on_black() {
+        // premultiplied: an opaque black stroke, clear (white), and a half-covered black stroke
+        let pixels = [0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 128];
+        let control = Picture::control(3, 1, &pixels).unwrap();
+        assert_eq!(control.rgba, vec![255, 255, 255, 255, 0, 0, 0, 255, 128, 128, 128, 255]);
+        assert!(Picture::control(2, 2, &pixels).is_err());
     }
 }

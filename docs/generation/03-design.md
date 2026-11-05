@@ -165,7 +165,8 @@ ProCraft's margins:
 - **What is sent**: the control layer's own pixels (not the picture). Control layers are **left out
   of the picture** that is sent for refine and selections, so their lines don't get painted in as
   colour. Hidden control layers are ignored.
-- **Saved with the artwork** (a layer property; §B10).
+- **Saved with the artwork** (a layer property; §B10). Hidden control layers keep their row (dimmed)
+  in the popover, so their strength is kept while they're off.
 - Named **"Control layer"**, the term ComfyUI users know (§D3); it also stays clear of ProCraft's
   own "Guide" and "Reference".
 
@@ -431,6 +432,12 @@ turned to white lines on black (what the control models expect), cropped and sca
 picture. Exact settings (grow, blur, control strengths for Anima) are tuned in M3/M4 against the
 dev server and kept as constants in `family/anima.rs`.
 
+*As built (M4):* each control is its own `ETN_control_load`/`ETN_control_apply` pair, chained on the
+model before sampling (and before the inpaint control for selections), with no mask and
+`start_percent` 0: `end_percent` 1.0 for line art, 0.8 for scribble. Strengths come from the run
+(70 % line art, 50 % scribble unless the popover says otherwise); a control image is sent at each
+pass's size, so both passes of a two-pass picture follow it.
+
 ## B7. Sizes: the resolution planner
 
 Anima works best near **1 MP**. For an area of `W × H` canvas pixels (the canvas, or the selection's
@@ -530,9 +537,12 @@ A style (`styles/anima.json`, our own file):
 
 ## B10. Saved with the artwork
 
-- **Control layer**: `Layer.control: Option<{ kind, strength }>` in the engine's document,
+- **Control layer**: `Layer.control: Option<{ kind }>` in the engine's document,
   `#[serde(default, skip_serializing_if = "Option::is_none")]`. Old artworks load unchanged; an
-  artwork with control layers opened in upstream ProCraft just ignores the field.
+  artwork with control layers opened in upstream ProCraft just ignores the field. *(As built: the
+  kind only. Strength belongs to the run (`RunSettings.controls`), not the artwork, so the same
+  layer can be followed differently each time; a visible layer missing from the run's list uses
+  70 % for line art and 50 % for scribble.)*
 - **Results** (brought forward from Phase 2): kept in the artwork's folder, in a private
   `generation/` subfolder that no export reads. `index.json` lists every result in order (its id,
   seed, name, area, scaled_from and thumbnail size), `<id>.png` holds its pixels losslessly

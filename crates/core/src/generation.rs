@@ -24,8 +24,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use parking_lot::Mutex;
 use procraft_diffusion::plan::context_box;
 use procraft_diffusion::{
-    Address, Connection, Feature, Picture, Request, Resolution as PlanResolution, RunId, Selection as RequestSelection,
-    SelectionMode as RequestMode, Worker, largest_for_vram, plan_for,
+    Address, Connection, Control as RequestControl, ControlKind as RequestControlKind, Feature, Picture, Request,
+    Resolution as PlanResolution, RunId, Selection as RequestSelection, SelectionMode as RequestMode, Worker,
+    largest_for_vram, plan_for,
 };
 use procraft_engine::cms::{Lut, builtin};
 use procraft_engine::document::{Document, LayerId};
@@ -33,10 +34,17 @@ use procraft_engine::geom::IRect;
 use procraft_engine::profile::Profile;
 use procraft_engine::selection::Mask;
 
+use crate::layers::LayerControl;
 use crate::{CanvasSession, ThumbnailImage};
 
 /// Results and previews are listed at most this big.
 const THUMBNAIL_SIDE: u32 = 160;
+/// A control layer's picture in the popover is at most this big.
+const CONTROL_THUMBNAIL_SIDE: u32 = 96;
+/// How strongly a control layer is followed when the run has no strength for it: line art
+/// closely, scribbles loosely.
+const LINE_ART_STRENGTH: f32 = 0.7;
+const SCRIBBLE_STRENGTH: f32 = 0.5;
 /// The most pictures one run makes.
 const MOST_PICTURES: u32 = 4;
 /// A generated layer's name keeps this much of the prompt.
@@ -119,6 +127,15 @@ impl From<RequestMode> for GenerationMode {
     }
 }
 
+impl From<LayerControl> for RequestControlKind {
+    fn from(kind: LayerControl) -> RequestControlKind {
+        match kind {
+            LayerControl::LineArt => RequestControlKind::LineArt,
+            LayerControl::Scribble => RequestControlKind::Scribble,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum ServerConnection {
     /// No address set.
@@ -195,6 +212,14 @@ pub struct StyleInfo {
     pub found: bool,
 }
 
+/// A control layer's strength in a run: layer `layer` followed at `strength` (0..1, 0: not at
+/// all). A visible control layer missing from the run's list uses its kind's default.
+#[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
+pub struct ControlSetting {
+    pub layer: u64,
+    pub strength: f32,
+}
+
 /// What to run: the prompt, a style's id, the strength (1 makes a new picture, lower refines the
 /// one there is), the seed (none: a random one), how many pictures (1 to 4) and how large to make
 /// them (none: Quality).
@@ -210,6 +235,10 @@ pub struct RunSettings {
     /// The selection's mode; none guesses Fill or Expand from what is selected.
     #[uniffi(default = None)]
     pub mode: Option<GenerationMode>,
+    /// How strongly to follow each control layer; layers left out use their kind's default, and
+    /// a strength of 0 leaves that layer out.
+    #[uniffi(default = [])]
+    pub controls: Vec<ControlSetting>,
 }
 
 /// The run going now.
@@ -240,6 +269,18 @@ pub struct ResultInfo {
     pub scaled_from_width: u32,
     #[uniffi(default = 0)]
     pub scaled_from_height: u32,
+}
+
+/// A layer whose pixels guide generation, as the popover lists it.
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
+pub struct ControlLayerInfo {
+    pub id: u64,
+    pub name: String,
+    pub kind: LayerControl,
+    /// Small, premultiplied.
+    pub thumbnail: ThumbnailImage,
+    /// Hidden control layers are ignored by runs.
+    pub visible: bool,
 }
 
 /// What a resolution makes for the open artwork: the target size, the passes, and the size
@@ -548,6 +589,27 @@ impl Generation {
         Some(SelectionInfo { x, y, width, height, mode })
     }
 
+    /// The artwork's control layers, top first, each with a small thumbnail; hidden ones are
+    /// included (runs ignore them).
+    pub fn control_layers(&self, session: &CanvasSession) -> Vec<ControlLayerInfo> {
+        let layers: Vec<(u64, String, LayerControl, bool)> = {
+            let st = session.shared.lock();
+            st.doc
+                .layers()
+                .iter()
+                .rev()
+                .filter_map(|l| l.control.map(|c| (l.id.0, l.name.clone(), c.kind.into(), l.visible)))
+                .collect()
+        };
+        layers
+            .into_iter()
+            .filter_map(|(id, name, kind, visible)| {
+                let thumbnail = session.layer_thumbnail(id, CONTROL_THUMBNAIL_SIDE)?;
+                Some(ControlLayerInfo { id, name, kind, thumbnail, visible })
+            })
+            .collect()
+    }
+
     /// What `resolution` makes of `session`'s area (the selection's context box when there is a
     /// selection): its target, passes and generated size.
     pub fn size_for(&self, session: &CanvasSession, resolution: GenerationResolution) -> SizeInfo {
@@ -682,6 +744,12 @@ impl Generation {
             request_selection = Some(RequestSelection { mask: part.clone(), mode: mode.into() });
             mask = Some(part);
         }
+        let controls = run_controls(session, &run.controls, area)?;
+        if !controls.is_empty() && !server.ready(style.family, Feature::ControlLayers) {
+            return Err(GenerationError::NotReady {
+                reason: format!("the server isn't ready to {}", Feature::ControlLayers.label()),
+            });
+        }
         let request = Request {
             prompt: run.prompt,
             style,
@@ -690,6 +758,7 @@ impl Generation {
             count: run.count.clamp(1, MOST_PICTURES),
             picture: request_picture,
             selection: request_selection,
+            controls,
             size,
             resolution: run.resolution.unwrap_or_default().into(),
             largest: Some(self.largest_megapixels(&server)),
@@ -1381,6 +1450,38 @@ fn selection_bounds(session: &CanvasSession) -> Option<([u32; 4], (u32, u32))> {
     Some((bounds, (state.doc.width(), state.doc.height())))
 }
 
+fn default_control_strength(kind: LayerControl) -> f32 {
+    match kind {
+        LayerControl::LineArt => LINE_ART_STRENGTH,
+        LayerControl::Scribble => SCRIBBLE_STRENGTH,
+    }
+}
+
+/// The visible control layers' pictures over `area`, each with its strength: from `settings` by
+/// layer, else its kind's default; a strength of 0 leaves that layer out.
+fn run_controls(
+    session: &CanvasSession,
+    settings: &[ControlSetting],
+    area: IRect,
+) -> Result<Vec<RequestControl>, GenerationError> {
+    let layers: Vec<(LayerId, LayerControl)> = {
+        let st = session.shared.lock();
+        st.doc.control_layers().filter_map(|l| l.control.map(|c| (l.id, c.kind.into()))).collect()
+    };
+    let mut controls = Vec::new();
+    for (id, kind) in layers {
+        let default = default_control_strength(kind);
+        let strength = settings.iter().find(|s| s.layer == id.0).map_or(default, |s| s.strength);
+        let strength = if strength.is_finite() { strength.clamp(0.0, 1.0) } else { default };
+        if strength <= 0.0 {
+            continue;
+        }
+        let picture = session.control_picture(id, area)?;
+        controls.push(RequestControl { kind: kind.into(), strength, picture });
+    }
+    Ok(controls)
+}
+
 /// Whether a selection is mostly transparent pixels at the canvas edge (then Expand), else Fill.
 fn guess_mode(mask: &Mask, picture: &Picture, canvas: (u32, u32)) -> GenerationMode {
     let Some([x, y, width, height]) = mask.bounds() else { return GenerationMode::Fill };
@@ -1516,13 +1617,40 @@ impl CanvasSession {
             return Err(unreadable("the canvas isn't drawn yet".to_owned()));
         };
         canvas.render_finished(gpu, &mut st.doc);
-        let mut rgba = canvas.read_composite(gpu).map_err(|e| unreadable(e.to_string()))?;
+        // control layers guide the run with their own pixels, not painted in as colour
+        let left_out: Vec<LayerId> = st.doc.control_layers().map(|l| l.id).collect();
+        let mut rgba =
+            canvas.read_composite_without(gpu, &mut st.doc, &left_out).map_err(|e| unreadable(e.to_string()))?;
         if let Some(lut) = &to_srgb {
             lut.apply_rgba(&mut rgba, true);
         }
         unpremultiply(&mut rgba);
         let picture = Picture::new(width, height, rgba).map_err(|e| unreadable(e.to_string()))?;
         Ok(ForGeneration { width, height, picture: Some(picture), from_srgb })
+    }
+
+    /// Layer `id`'s pixels over `area`, flattened onto white and turned into white lines on black
+    /// (a control image), at the area's size.
+    fn control_picture(&self, id: LayerId, area: IRect) -> Result<Picture, GenerationError> {
+        let mut guard = self.shared.lock_finished();
+        let st = &mut *guard;
+        st.finish_stroke();
+        st.settle();
+        st.flush();
+        let unreadable = |reason: String| GenerationError::Canvas { reason };
+        let (Some(canvas), Some(gpu)) = (st.canvas.as_mut(), st.gpu.as_ref()) else {
+            return Err(unreadable("the canvas isn't drawn yet".to_owned()));
+        };
+        canvas.render_finished(gpu, &mut st.doc);
+        let pixels = match canvas.read_layer_part(gpu, id, area) {
+            Ok(pixels) => pixels,
+            Err(e) if e.to_string().contains("no layer") => {
+                // a layer never painted has no pixels yet: its control image is blank
+                vec![0; area.width() as usize * area.height() as usize * 4]
+            }
+            Err(e) => return Err(unreadable(e.to_string())),
+        };
+        Picture::control(area.width(), area.height(), &pixels).map_err(|e| unreadable(e.to_string()))
     }
 
     /// Shows `overlay` (an area and its premultiplied pixels) over the canvas, or nothing.
@@ -1591,6 +1719,35 @@ mod tests {
     fn at(px: &[u8], side: u32, x: u32, y: u32) -> [u8; 4] {
         let i = ((y * side + x) * 4) as usize;
         [px[i], px[i + 1], px[i + 2], px[i + 3]]
+    }
+
+    #[test]
+    fn control_layers_are_listed_and_hidden_ones_are_left_out_of_runs() {
+        let Some(s) = session(32) else { return };
+        let id = s.layers()[0].id;
+        assert!(s.set_layer_control(id, Some(LayerControl::LineArt)));
+        assert_eq!(s.layers()[0].control, Some(LayerControl::LineArt));
+        assert!(s.layer_options(id).iter().any(|r| r.option == crate::LayerOption::ControlLayer));
+        let generation = Generation::new(settings());
+        let listed = generation.control_layers(&s);
+        assert_eq!(listed.len(), 1);
+        assert_eq!((listed[0].id, listed[0].kind, listed[0].visible), (id, LayerControl::LineArt, true));
+        assert!(listed[0].thumbnail.width > 0 && listed[0].thumbnail.height > 0);
+        // hidden, it is ignored by a run; shown, its default strength is used
+        assert!(s.set_layer_visible(id, false));
+        assert!(!generation.control_layers(&s)[0].visible);
+        assert!(run_controls(&s, &[], IRect::from_size(32, 32)).unwrap().is_empty());
+        assert!(s.set_layer_visible(id, true));
+        let defaults = run_controls(&s, &[], IRect::from_size(32, 32)).unwrap();
+        assert_eq!((defaults.len(), defaults[0].strength), (1, LINE_ART_STRENGTH));
+        // a strength of 0 leaves it out; a setting replaces the default
+        let none = [ControlSetting { layer: id, strength: 0.0 }];
+        assert!(run_controls(&s, &none, IRect::from_size(32, 32)).unwrap().is_empty());
+        let stronger = [ControlSetting { layer: id, strength: 0.9 }];
+        assert_eq!(run_controls(&s, &stronger, IRect::from_size(32, 32)).unwrap()[0].strength, 0.9);
+        // turned off, it is not listed or used
+        assert!(s.set_layer_control(id, None));
+        assert!(generation.control_layers(&s).is_empty());
     }
 
     #[test]

@@ -267,6 +267,21 @@ impl LayerText {
     }
 }
 
+/// What a layer's pixels guide generation as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ControlKind {
+    /// Clean lines, followed closely.
+    LineArt,
+    /// Rough strokes, followed loosely.
+    Scribble,
+}
+
+/// A layer whose pixels guide generation: its kind (its strength is the run's, not the layer's).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Control {
+    pub kind: ControlKind,
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Layer {
     pub id: LayerId,
@@ -302,6 +317,9 @@ pub struct Layer {
     /// Strokes on it follow the drawing guide (drawing assist).
     #[serde(default)]
     pub assisted: bool,
+    /// Its pixels guide generation as a control layer (and are left out of the picture sent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<Control>,
 }
 
 impl Layer {
@@ -323,6 +341,7 @@ impl Layer {
             text: None,
             private: false,
             assisted: false,
+            control: None,
         }
     }
 
@@ -652,6 +671,22 @@ impl Document {
             l.reference = on && l.id == id;
         }
         true
+    }
+
+    /// Makes `id` a control layer of `kind` (or, not `kind`, an ordinary one); false for anything
+    /// but a raster paint layer (not a group, a mask, a text layer or the background).
+    pub fn set_control(&mut self, id: LayerId, kind: Option<ControlKind>) -> bool {
+        let Some(layer) = self.layer_mut(id) else { return false };
+        if layer.kind != LayerKind::Paint || layer.text.is_some() {
+            return false;
+        }
+        layer.control = kind.map(|kind| Control { kind });
+        true
+    }
+
+    /// The visible layers whose pixels guide generation, bottom first.
+    pub fn control_layers(&self) -> impl Iterator<Item = &Layer> + '_ {
+        self.layers.iter().filter(|l| l.control.is_some() && l.visible)
     }
 
     /// Whether layer `id` is left out of the picture while another is shown alone (solo): all
@@ -1659,6 +1694,34 @@ mod tests {
         assert!(d.delete_layer(b));
         assert_eq!(d.current(), a);
         assert!(!d.delete_layer(a), "the last layer stays");
+    }
+
+    #[test]
+    fn a_control_layer_is_saved_with_its_kind_and_only_raster_layers_take_it() {
+        let mut d = Document::new(10, 10);
+        let a = d.current();
+        let plain = serde_json::to_string(&d).unwrap();
+        assert!(!plain.contains("\"control\""), "an artwork without control layers saves as it did");
+        assert!(d.set_control(a, Some(ControlKind::LineArt)));
+        assert_eq!(d.layer(a).unwrap().control, Some(Control { kind: ControlKind::LineArt }));
+        let json = serde_json::to_string(&d).unwrap();
+        let back: Document = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.layer(a).unwrap().control, Some(Control { kind: ControlKind::LineArt }));
+        // copied with the layer
+        let copy = d.duplicate_layer(a).unwrap();
+        assert_eq!(d.layer(copy).unwrap().control, Some(Control { kind: ControlKind::LineArt }));
+        // a group, a mask and a text layer have none to give
+        let b = d.add_layer();
+        let mask = d.add_mask(b).unwrap();
+        assert!(!d.set_control(mask, Some(ControlKind::Scribble)));
+        let text = d.add_text_layer(LayerText { text: "Hi".to_owned(), ..LayerText::default() });
+        assert!(!d.set_control(text, Some(ControlKind::Scribble)));
+        let group = d.combine_down(text).unwrap();
+        assert!(!d.set_control(group, Some(ControlKind::Scribble)));
+        // and it can be turned off
+        assert!(d.set_control(a, None));
+        assert_eq!(d.layer(a).unwrap().control, None);
+        assert!(!d.set_control(LayerId(999), Some(ControlKind::Scribble)));
     }
 
     #[test]

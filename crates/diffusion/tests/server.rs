@@ -49,6 +49,7 @@ fn turbo(server: &ServerState, size: (u32, u32), count: u32) -> Request {
         count,
         picture: None,
         selection: None,
+        controls: Vec::new(),
         size,
         resolution: Resolution::Quality,
         largest: Some(6.0),

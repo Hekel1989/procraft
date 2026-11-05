@@ -5,9 +5,8 @@ use procraft_engine::document::LayerId;
 use procraft_engine::geom::IRect;
 use procraft_engine::selection::Mask;
 
-use crate::layers::ThumbnailImage;
+use crate::layers::{LayerControl, ThumbnailImage};
 use crate::{CanvasSession, State};
-
 impl State {
     /// A layer's pixels, everything queued drawn first.
     pub(crate) fn layer_pixels(&mut self, id: LayerId) -> Option<Vec<u8>> {
@@ -203,6 +202,23 @@ impl CanvasSession {
         }
         if let Some(canvas) = st.canvas.as_mut() {
             canvas.name_next_step(if on { "reference layer on" } else { "reference layer off" });
+            canvas.record_document(before);
+        }
+        st.revision += 1;
+        true
+    }
+
+    /// Makes layer `id` guide generation as `kind` (or, `None`, an ordinary layer) through its
+    /// pixels: one step ("Undo control layer on"). False unless it is a raster layer.
+    pub fn set_layer_control(&self, id: u64, kind: Option<LayerControl>) -> bool {
+        let mut guard = self.shared.lock();
+        let st = &mut *guard;
+        let before = st.doc.clone();
+        if !st.doc.set_control(LayerId(id), kind.map(Into::into)) {
+            return false;
+        }
+        if let Some(canvas) = st.canvas.as_mut() {
+            canvas.name_next_step(if kind.is_some() { "control layer on" } else { "control layer off" });
             canvas.record_document(before);
         }
         st.revision += 1;

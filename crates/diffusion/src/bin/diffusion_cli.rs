@@ -186,6 +186,7 @@ fn generate(worker: &Worker, server: &ServerState, prompt: &str, args: &[String]
         count: number(args, "--count", 1)?,
         picture: picture.map(|p| p.resized(size.0, size.1)).transpose().map_err(|e| e.to_string())?,
         selection,
+        controls: Vec::new(),
         size,
         resolution,
         largest,
