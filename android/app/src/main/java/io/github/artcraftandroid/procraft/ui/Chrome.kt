@@ -82,6 +82,7 @@ fun TopBar(vm: CanvasViewModel, modifier: Modifier = Modifier) {
             ActionButton(PcIcons.Adjustments, "Adjustments", selected = vm.panel == Panel.ADJUSTMENTS || vm.adjustment != null || vm.opacityLayer != null || vm.recoloring) { vm.adjustmentsPressed() }
             ActionButton(PcIcons.Selection, "Selection", selected = vm.selecting, glyph = 33.dp) { vm.toggleSelecting() }
             ActionButton(PcIcons.Transform, "Transform", selected = vm.transforming, glyph = 44.dp) { vm.toggleTransform() }
+            io.github.artcraftandroid.procraft.generation.GenerationUi.BarButton(vm)
         }
         // the layers and colour panels take the highlight from the current tool while open
         val panelOpen = vm.panel == Panel.LAYERS || vm.panel == Panel.COLOR || vm.transforming || vm.selecting || vm.adjustment != null
@@ -113,7 +114,7 @@ fun TopBar(vm: CanvasViewModel, modifier: Modifier = Modifier) {
 
 /** An action button: its glyph on a dark disc, which turns blue while its panel is open. */
 @Composable
-private fun ActionButton(icon: ImageVector, label: String, selected: Boolean = false, glyph: Dp = 36.dp, onClick: () -> Unit = {}) {
+internal fun ActionButton(icon: ImageVector, label: String, selected: Boolean = false, glyph: Dp = 36.dp, onClick: () -> Unit = {}) {
     val lit = animateHighlight(selected)
     Box(Modifier.size(Pc.BarButtonWidth, Pc.BarButtonHeight).tap(onClick = onClick), contentAlignment = Alignment.Center) {
         Box(Modifier.size(Pc.ActionDiscSize).clip(CircleShape).background(lerp(Pc.ActionDisc, Pc.BarGlyphSelected, lit)))

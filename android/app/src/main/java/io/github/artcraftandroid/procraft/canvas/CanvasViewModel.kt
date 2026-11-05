@@ -92,7 +92,7 @@ private const val TAG = "ProCraft"
 /** [CanvasViewModel.shownSet] while the library shows the Recent set. */
 const val RECENT_SET = -1
 
-enum class Panel { NONE, LAYERS, COLOR, BRUSHES, ACTIONS, ADJUSTMENTS }
+enum class Panel { NONE, LAYERS, COLOR, BRUSHES, ACTIONS, ADJUSTMENTS, GENERATE }
 
 /** The eyedropper while it is open: the window point (pixels), what is shown around it, the colour it would pick. */
 class PickState(val x: Float, val y: Float, val image: ImageBitmap?, val rgb: Int?, val fromReference: Boolean = false)
@@ -1985,6 +1985,7 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
         endLayerOpacity()
         endTransform(true)
         endAdjustment(true)
+        io.github.artcraftandroid.procraft.generation.GenerationUi.leave(this)
         val s = session ?: return
         noteTime()
         keepChoices(s)
