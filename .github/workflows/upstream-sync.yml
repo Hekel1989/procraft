@@ -1,14 +1,17 @@
 name: Upstream sync
 
-# ProCraft Diffusion follows ProCraft (artcraft-android/procraft). Once a day, and by hand (Actions >
+# ProCraft Diffusion follows ProCraft (artcraft-android/procraft). Daily at 08:00 London time, and by hand (Actions >
 # Upstream sync > Run workflow), this merges ProCraft's latest main into main-diffusion on the
 # runner, then runs ProCraft's own checks and ours. Nothing lands on main-diffusion by itself:
 # - merged and passing: the result is pushed to the branch sync/upstream, ready to take in
 #   (`git merge origin/sync/upstream`, or ask the agent);
 # - a conflict or a failing check: the run fails (GitHub emails), and its summary says what.
 on:
+  # 08:00 in London is 08:00 UTC in winter and 07:00 UTC in summer: both are scheduled, and the
+  # run that isn't 08:00 in London stops at once (GitHub may start a scheduled run a few minutes late)
   schedule:
-    - cron: "17 5 * * *"
+    - cron: "0 7 * * *"
+    - cron: "0 8 * * *"
   workflow_dispatch:
 
 permissions:
@@ -39,6 +42,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/artcraft-android/procraft.git
+          if [ "${{ github.event_name }}" = schedule ] && [ "$(TZ=Europe/London date +%H)" != 08 ]; then
+            echo "new=0" >> "$GITHUB_OUTPUT"
+            echo "Not 08:00 in London: the other scheduled run does it." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           git fetch --quiet upstream main
           new=$(git rev-list --count HEAD..upstream/main)
           echo "new=$new" >> "$GITHUB_OUTPUT"
