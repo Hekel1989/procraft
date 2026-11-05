@@ -153,6 +153,17 @@ impl Picture {
         Picture::new(width, height, rgba)
     }
 
+    /// An extractor's picture (white lines on black) as a layer's pixels (premultiplied RGBA8):
+    /// black where the lines are and clear where they aren't, its alpha the pixel's luminance.
+    pub fn lines_alpha(&self) -> Vec<u8> {
+        let mut rgba = Vec::with_capacity(self.rgba.len());
+        for &[r, g, b, _] in self.rgba.as_chunks::<4>().0 {
+            let luma = (299 * u32::from(r) + 587 * u32::from(g) + 114 * u32::from(b) + 500) / 1000;
+            rgba.extend_from_slice(&[0, 0, 0, u8::try_from(luma).unwrap_or(255)]);
+        }
+        rgba
+    }
+
     fn image(&self) -> Result<RgbaImage, Error> {
         RgbaImage::from_raw(self.width, self.height, self.rgba.clone())
             .ok_or_else(|| Error::picture("pixels don't match the size"))
@@ -221,5 +232,17 @@ mod tests {
         let control = Picture::control(3, 1, &pixels).unwrap();
         assert_eq!(control.rgba, vec![255, 255, 255, 255, 0, 0, 0, 255, 128, 128, 128, 255]);
         assert!(Picture::control(2, 2, &pixels).is_err());
+    }
+
+    #[test]
+    fn extracted_lines_become_black_with_their_luminance_as_alpha() {
+        // white, black, mid grey and an opaque green Anima's scribble might return
+        let lines =
+            Picture::new(4, 1, vec![255, 255, 255, 255, 0, 0, 0, 255, 128, 128, 128, 255, 0, 255, 0, 255]).unwrap();
+        assert_eq!(
+            lines.lines_alpha(),
+            vec![0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 150],
+            "white is opaque black, black clear, grey half; colour weighs as luminance"
+        );
     }
 }

@@ -17,7 +17,7 @@ use serde_json::json;
 use crate::comfy::{Comfy, Event, Socket, SystemStats};
 use crate::plan::{largest_for_vram, plan_for};
 use crate::requirements::{Feature, Readiness, all_nodes};
-use crate::{Address, Error, Family, Graph, Picture, Request, ServerModels, Style, styles_for};
+use crate::{Address, ControlKind, Error, Family, Graph, Picture, Request, ServerModels, Style, styles_for};
 
 /// Sampling previews are kept at most this big.
 const PREVIEW_SIDE: u32 = 512;
@@ -90,11 +90,28 @@ pub struct RunState {
     pub finished: bool,
 }
 
+/// A picture to run through one of the server's line extractors: its kind, the picture (straight
+/// RGBA, sRGB), and the area's size the lines are scaled back to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Extraction {
+    pub kind: ControlKind,
+    pub picture: Picture,
+    pub size: (u32, u32),
+}
+
+/// What the thread has been asked to run.
+enum Queued {
+    /// A run for pictures, one graph each.
+    Pictures(Box<Request>),
+    /// A picture through a line extractor, one graph.
+    Extract(Box<Extraction>),
+}
+
 #[derive(Default)]
 struct Inner {
     server: ServerState,
     connect: bool,
-    queue: VecDeque<(RunId, Request)>,
+    queue: VecDeque<(RunId, Queued)>,
     runs: HashMap<RunId, RunState>,
     cancelled: HashSet<RunId>,
     next: RunId,
@@ -166,7 +183,18 @@ impl Worker {
         let id = inner.next;
         inner.next += 1;
         inner.runs.insert(id, RunState { id, count: request.count.max(1), ..RunState::default() });
-        inner.queue.push_back((id, request));
+        inner.queue.push_back((id, Queued::Pictures(Box::new(request))));
+        self.shared.wake.notify_all();
+        id
+    }
+
+    /// Queues `extraction`: a picture through one of the server's line extractors; its run's id.
+    pub fn extract(&self, extraction: Extraction) -> RunId {
+        let mut inner = self.shared.inner.lock();
+        let id = inner.next;
+        inner.next += 1;
+        inner.runs.insert(id, RunState { id, count: 1, ..RunState::default() });
+        inner.queue.push_back((id, Queued::Extract(Box::new(extraction))));
         self.shared.wake.notify_all();
         id
     }
@@ -219,7 +247,7 @@ fn finish(inner: &mut Inner, id: RunId, error: Option<Error>) {
 /// What the thread does next.
 enum Job {
     Connect(Address),
-    Run(RunId, Box<Request>),
+    Run(RunId, Box<Queued>),
 }
 
 /// The thread: connects when asked, runs what's queued, sleeps otherwise.
@@ -246,8 +274,8 @@ fn work(shared: &Shared) {
                         break Job::Connect(address);
                     }
                 }
-                if let Some((id, request)) = inner.queue.pop_front() {
-                    break Job::Run(id, Box::new(request));
+                if let Some((id, queued)) = inner.queue.pop_front() {
+                    break Job::Run(id, Box::new(queued));
                 }
                 shared.wake.wait(&mut inner);
             }
@@ -277,12 +305,17 @@ fn work(shared: &Shared) {
                     }
                 }
             }
-            Job::Run(id, request) => {
+            Job::Run(id, queued) => {
                 let models = shared.inner.lock().server.models.clone();
                 let outcome = match (&comfy, models) {
                     (Some(api), Some(models)) => {
                         let on = Running { shared, api, client_id: &client_id, id };
-                        run(&on, &mut socket, &mut recent, &request, &models)
+                        match &*queued {
+                            Queued::Pictures(request) => run(&on, &mut socket, &mut recent, request, &models),
+                            Queued::Extract(extraction) => {
+                                extract_run(&on, &mut socket, &mut recent, extraction, &models)
+                            }
+                        }
                     }
                     _ => {
                         Err(Error::Unreachable { address: request_address(shared), reason: "not connected".to_owned() })
@@ -412,6 +445,45 @@ fn run(
             run.progress = part(1.0) as f32;
             run.preview = None;
         }
+    }
+    Ok(())
+}
+
+/// Runs `extraction`: the picture through its extractor, followed over the WebSocket until it's
+/// done, then scaled back to the area's size.
+fn extract_run(
+    on: &Running<'_>,
+    socket: &mut Option<Socket>,
+    recent: &mut Recent,
+    extraction: &Extraction,
+    models: &ServerModels,
+) -> Result<(), Error> {
+    let missing = Readiness::check(Family::Anima, models).missing(Feature::ControlFromPicture).to_vec();
+    if !missing.is_empty() {
+        return Err(Error::Missing(missing));
+    }
+    let graph = crate::extract::graph(extraction.kind, &extraction.picture)?;
+    // an extraction has no sampler: its progress is the one graph's
+    let bytes = match follow(on, socket, &graph, |done| done, &[1.0])? {
+        Some(bytes) => bytes,
+        None => match recent.find(&graph) {
+            Some(bytes) => bytes,
+            None => {
+                let mut again = graph.clone();
+                for node in again.nodes_of("ETN_SendImageWebSocket") {
+                    again.set(&node, "format", json!("JPEG"));
+                }
+                follow(on, socket, &again, |done| done, &[1.0])?
+                    .ok_or_else(|| Error::protocol("the server finished without sending a picture"))?
+            }
+        },
+    };
+    recent.remember(&graph, &bytes);
+    let picture = Picture::decode(&bytes)?.resized(extraction.size.0, extraction.size.1)?;
+    if let Some(run) = on.shared.inner.lock().runs.get_mut(&on.id) {
+        run.results.push(RunResult { seed: 0, picture, generated: extraction.size });
+        run.progress = 1.0;
+        run.preview = None;
     }
     Ok(())
 }

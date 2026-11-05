@@ -125,6 +125,14 @@ struct Blend {
     moved: Option<Instant>,
 }
 
+/// What a Control layer choice does: makes the layer a control layer of a kind, or starts making a
+/// new control layer from the picture.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ControlChoice {
+    Kind(Option<LayerControl>),
+    FromPicture(LayerControl),
+}
+
 #[derive(Default)]
 pub struct Layers {
     /// Each layer's thumbnail and the pixels' version it shows.
@@ -157,11 +165,12 @@ pub struct Layers {
     pinch: Option<Pinch>,
     twin: Option<Twin>,
     /// What the panel asks of the app: a notice to show, a layer's contents copied, the chosen
-    /// layers shared, a text layer's text edited.
+    /// layers shared, a text layer's text edited, and a control layer to make from the picture.
     pub notice: Option<(String, bool)>,
     pub copied: Option<ThumbnailImage>,
     pub share: bool,
     pub edit_text: Option<u64>,
+    pub extract: Option<LayerControl>,
     /// Layer Opacity asked for the current layer (two fingers tapped on its row).
     pub layer_opacity: bool,
     /// On a model: the mesh open (its texture set's layers under it), the layer whose channels
@@ -249,6 +258,7 @@ impl Layers {
         self.press = None;
         self.slid.clear();
         self.swiped = None;
+        self.extract = None;
         self.open_mesh = None;
         self.tray_for = None;
         self.channel = 0;
@@ -262,13 +272,15 @@ impl Layers {
         self.options_menu.is_open() || self.title_menu.is_open() || self.deleting.is_open() || self.locked.is_open()
     }
 
-    /// Shows the panel hanging from `button`; returns where it is (points).
+    /// Shows the panel hanging from `button`; `can_extract` says whether the server can make a
+    /// control layer from the picture. Returns where it is (points).
     pub fn show(
         &mut self,
         ctx: &egui::Context,
         look: &mut Look,
         session: &CanvasSession,
         colours: &mut Colours,
+        can_extract: bool,
         button: Rect,
         backdrops: &mut Vec<f32>,
     ) -> Rect {
@@ -542,7 +554,7 @@ impl Layers {
             let row_y = row_rects.get(&l.id).map_or(rect.center().y, |r| r.center().y);
             self.layer_options(ctx, look, session, l, rect, row_y, backdrops);
         }
-        self.control_options(ctx, look, session, backdrops);
+        self.control_options(ctx, look, session, can_extract, backdrops);
         self.title_menu(ctx, look, session, title, any_picked, backdrops);
         // the title menu's Delete asks first
         // asked first; then, as measured, a locked one among them stops it, said why
@@ -1153,13 +1165,15 @@ impl Layers {
         }
     }
 
-    /// The Control layer choices, beside the options: None, Line art or Scribble. Chosen, layer
-    /// `id` guides generation as that (or no longer does).
+    /// The Control layer choices, beside the options: None, Line art, Scribble, and the two made
+    /// from the picture (disabled, with a note, when the server can't). Chosen, layer `id` guides
+    /// generation as that (or no longer does), or an extraction starts.
     fn control_options(
         &mut self,
         ctx: &egui::Context,
         look: &mut Look,
         session: &CanvasSession,
+        can_extract: bool,
         backdrops: &mut Vec<f32>,
     ) {
         if self.control_pending {
@@ -1178,9 +1192,16 @@ impl Layers {
             self.control_for = None;
             return;
         };
-        let choices =
-            [(None, "None"), (Some(LayerControl::LineArt), "Line art"), (Some(LayerControl::Scribble), "Scribble")];
-        let size = vec2(150.0, 7.0 * 2.0 + menu::OPTION_HEIGHT * choices.len() as f32);
+        let choices = [
+            (ControlChoice::Kind(None), "None"),
+            (ControlChoice::Kind(Some(LayerControl::LineArt)), "Line art"),
+            (ControlChoice::Kind(Some(LayerControl::Scribble)), "Scribble"),
+            (ControlChoice::FromPicture(LayerControl::LineArt), "Line art from picture"),
+            (ControlChoice::FromPicture(LayerControl::Scribble), "Scribble from picture"),
+        ];
+        let note = (!can_extract).then_some("needs comfyui_controlnet_aux");
+        let rows = choices.len() + usize::from(note.is_some());
+        let size = vec2(238.0, 7.0 * 2.0 + menu::OPTION_HEIGHT * rows as f32);
         let screen = ctx.content_rect();
         let left = (from.left() - size.x - 6.0)
             .clamp(screen.left() + 6.0, (screen.right() - size.x - 6.0).max(screen.left() + 6.0));
@@ -1197,17 +1218,42 @@ impl Layers {
             backdrops,
             |ui| {
                 let places = menu::option_rows(rect.left(), rect.top() + 7.0, rect.width(), choices.len());
-                for (row, (kind, label)) in places.zip(choices) {
-                    if menu::option(ui, look, row, label, l.control == kind, true, false) {
-                        chosen = Some(kind);
+                for (row, (choice, label)) in places.zip(choices) {
+                    let enabled = !matches!(choice, ControlChoice::FromPicture(_)) || can_extract;
+                    let checked = match choice {
+                        ControlChoice::Kind(kind) => l.control == kind,
+                        ControlChoice::FromPicture(_) => false,
+                    };
+                    if menu::option(ui, look, row, label, checked, enabled, false) {
+                        chosen = Some(choice);
                     }
+                }
+                if let Some(note) = note {
+                    let row = Rect::from_min_size(
+                        pos2(rect.left(), rect.top() + 7.0 + menu::OPTION_HEIGHT * choices.len() as f32),
+                        vec2(rect.width(), menu::OPTION_HEIGHT),
+                    );
+                    text(
+                        ui.painter(),
+                        pos2(row.left() + 19.0, row.center().y),
+                        Align2::LEFT_CENTER,
+                        note,
+                        12.0,
+                        Weight::Regular,
+                        argb(menu::DISABLED),
+                    );
                 }
             },
         );
-        let Some(kind) = chosen else { return };
+        let Some(choice) = chosen else { return };
         self.control_menu.close();
         self.control_for = None;
-        session.set_layer_control(id, kind);
+        match choice {
+            ControlChoice::Kind(kind) => {
+                session.set_layer_control(id, kind);
+            }
+            ControlChoice::FromPicture(kind) => self.extract = Some(kind),
+        }
     }
 
     /// The blend editor under a layer's row: its opacity, read and slid, then its blend modes, the

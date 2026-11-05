@@ -8,7 +8,7 @@ use serde_json::json;
 use super::ModelKind;
 use crate::comfy::ServerModels;
 use crate::plan::Plan;
-use crate::{ControlKind, Error, Family, Graph, Out, Picture, Request, SelectionMode};
+use crate::{ControlStep, Error, Family, Graph, Out, Picture, Request, SelectionMode};
 
 pub(super) const NATIVE_PIXELS: u32 = 1024 * 1024;
 /// How much the second pass of a two-pass picture changes it: enough to add detail, too little to
@@ -19,10 +19,12 @@ pub(super) const SECOND_PASS_DENOISE: f64 = 0.3;
 pub(super) const MOST_MEGAPIXELS: f32 = 3.0;
 /// The inpaint control's strength: the LLLite layer follows the mask whole.
 pub(super) const INPAINT_CONTROL_STRENGTH: f64 = 1.0;
-/// How far through sampling a control layer's lines are followed: line art to the end, scribbles
-/// only for the first four fifths, when they have shaped the picture enough.
-const LINE_ART_END: f64 = 1.0;
-const SCRIBBLE_END: f64 = 0.8;
+/// How closely a control layer is followed, as (strength, how far through sampling it applies):
+/// Loose only shapes the start, so the model can drift; Strict holds the lines to the end.
+pub(super) const LOOSE: (f32, f32) = (0.5, 0.4);
+pub(super) const BALANCED: (f32, f32) = (0.6, 0.6);
+pub(super) const CLOSE: (f32, f32) = (0.7, 0.8);
+pub(super) const STRICT: (f32, f32) = (1.0, 1.0);
 /// How much the last colour match pulls a selection's result towards the original: enough to blend
 /// it in, not enough to undo the generated colours.
 pub(super) const COLOR_MATCH: f64 = 0.5;
@@ -35,6 +37,17 @@ const INPAINT_BLUR_SHARE: u32 = 2;
 /// Its checkpoints: anything with "anima" in the name in `diffusion_models`.
 pub(super) fn recognises(file: &str) -> bool {
     super::matches("*anima*", file)
+}
+
+/// How closely a step follows a control layer: its strength and how far through sampling that
+/// applies.
+pub(super) fn control_settings(step: ControlStep) -> (f32, f32) {
+    match step {
+        ControlStep::Loose => LOOSE,
+        ControlStep::Balanced => BALANCED,
+        ControlStep::Close => CLOSE,
+        ControlStep::Strict => STRICT,
+    }
 }
 
 /// The files for each kind, best first.
@@ -77,10 +90,6 @@ pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerMod
             let image = g.add("ETN_LoadImageBase64", [("image", json!(procraft_engine::base64::encode(&png)))]);
             let load =
                 g.add("ETN_control_load", [("model", model.into()), ("weights", json!(file(ModelKind::LineControl)?))]);
-            let end = match control.kind {
-                ControlKind::LineArt => LINE_ART_END,
-                ControlKind::Scribble => SCRIBBLE_END,
-            };
             let apply = g.add(
                 "ETN_control_apply",
                 [
@@ -89,7 +98,7 @@ pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerMod
                     ("image", image.out(0).into()),
                     ("strength", json!(control.strength.clamp(0.0, 1.0))),
                     ("start_percent", json!(0.0)),
-                    ("end_percent", json!(end)),
+                    ("end_percent", json!(control.end_percent.clamp(0.0, 1.0))),
                 ],
             );
             model = apply.out(0);
@@ -258,7 +267,7 @@ fn missing(kind: ModelKind) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Picture, Style};
+    use crate::{ControlKind, Picture, Style};
 
     fn models() -> ServerModels {
         ServerModels {
@@ -426,18 +435,34 @@ mod tests {
         );
     }
 
-    fn controlled(mut request: Request, kind: ControlKind, strength: f32) -> Request {
-        request.controls =
-            vec![crate::Control { kind, strength, picture: Picture::new(4, 4, [0u8, 0, 0, 255].repeat(16)).unwrap() }];
+    fn controlled(mut request: Request, kind: ControlKind, step: ControlStep) -> Request {
+        let (strength, end_percent) = control_settings(step);
+        request.controls = vec![crate::Control {
+            kind,
+            strength,
+            end_percent,
+            picture: Picture::new(4, 4, [0u8, 0, 0, 255].repeat(16)).unwrap(),
+        }];
         request
     }
 
     #[test]
+    fn the_four_steps_are_tuned_as_designed() {
+        assert_eq!(control_settings(ControlStep::Loose), (0.5, 0.4));
+        assert_eq!(control_settings(ControlStep::Balanced), (0.6, 0.6));
+        assert_eq!(control_settings(ControlStep::Close), (0.7, 0.8));
+        assert_eq!(control_settings(ControlStep::Strict), (1.0, 1.0));
+        assert_eq!(ControlStep::default(), ControlStep::Balanced);
+    }
+
+    #[test]
     fn control_layers_are_chained_on_the_model_before_sampling() {
-        let mut request = controlled(request(1.0), ControlKind::LineArt, 0.7);
+        let mut request = controlled(request(1.0), ControlKind::LineArt, ControlStep::Close);
+        let (strength, end_percent) = control_settings(ControlStep::Loose);
         request.controls.push(crate::Control {
             kind: ControlKind::Scribble,
-            strength: 0.5,
+            strength,
+            end_percent,
             picture: Picture::new(4, 4, [0u8, 0, 0, 255].repeat(16)).unwrap(),
         });
         let built = graph(&request, one_pass(64, 32), 42, &models()).unwrap();
@@ -449,9 +474,9 @@ mod tests {
             assert_eq!(json[load]["inputs"]["weights"], "anima-lllite-any-test-like-v2.safetensors");
         }
         assert_eq!(json[&applies[0]]["inputs"]["strength"], json!(0.7f32));
-        assert_eq!(json[&applies[0]]["inputs"]["end_percent"], LINE_ART_END);
+        assert_eq!(json[&applies[0]]["inputs"]["end_percent"], json!(0.8f32));
         assert_eq!(json[&applies[1]]["inputs"]["strength"], json!(0.5f32));
-        assert_eq!(json[&applies[1]]["inputs"]["end_percent"], SCRIBBLE_END);
+        assert_eq!(json[&applies[1]]["inputs"]["end_percent"], json!(0.4f32));
         for apply in &applies {
             assert_eq!(json[apply]["inputs"]["start_percent"], 0.0);
             assert!(json[apply]["inputs"].get("mask").is_none(), "a control image needs no mask");
@@ -471,8 +496,13 @@ mod tests {
 
     #[test]
     fn a_refined_picture_follows_its_control_layers_too() {
-        let built =
-            graph(&controlled(request(0.5), ControlKind::LineArt, 0.7), one_pass(64, 32), 1, &models()).unwrap();
+        let built = graph(
+            &controlled(request(0.5), ControlKind::LineArt, ControlStep::Balanced),
+            one_pass(64, 32),
+            1,
+            &models(),
+        )
+        .unwrap();
         let json = built.to_json();
         assert_eq!(built.nodes_of("ETN_control_apply").len(), 1);
         let samplers = built.nodes_of("KSampler");
@@ -483,7 +513,7 @@ mod tests {
     #[test]
     fn both_passes_of_a_picture_follow_their_control_layers() {
         let built = graph(
-            &controlled(request(1.0), ControlKind::Scribble, 0.5),
+            &controlled(request(1.0), ControlKind::Scribble, ControlStep::Strict),
             two_pass((1024, 768), (2048, 1536)),
             42,
             &models(),
@@ -511,7 +541,7 @@ mod tests {
     #[test]
     fn a_selection_chains_its_control_layers_with_the_inpaint_control() {
         let built = graph(
-            &controlled(selection(SelectionMode::Fill), ControlKind::LineArt, 0.7),
+            &controlled(selection(SelectionMode::Fill), ControlKind::LineArt, ControlStep::Balanced),
             one_pass(64, 64),
             42,
             &models(),

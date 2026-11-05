@@ -1885,7 +1885,12 @@ impl Interface {
                 shown
             }
             Popover::Layers => {
-                let shown = self.layers.show(ctx, &mut self.look, session, &mut self.colours, button, backdrops);
+                #[cfg(feature = "generation")]
+                let can_extract = self.generation.generation.can_extract();
+                #[cfg(not(feature = "generation"))]
+                let can_extract = false;
+                let shown =
+                    self.layers.show(ctx, &mut self.look, session, &mut self.colours, can_extract, button, backdrops);
                 if let Some((text, warning)) = self.layers.notice.take() {
                     self.overlays.notice(text, warning);
                 }
@@ -1896,6 +1901,12 @@ impl Interface {
                 if let Some(id) = self.layers.edit_text.take() {
                     self.open = None;
                     self.text.edit(session, id);
+                }
+                #[cfg(feature = "generation")]
+                if let Some(kind) = self.layers.extract.take()
+                    && let Err(e) = self.generation.generation.control_from_picture(session, kind)
+                {
+                    self.overlays.notice(e.to_string(), true);
                 }
                 if std::mem::take(&mut self.layers.layer_opacity) {
                     self.start_layer_opacity(session);
