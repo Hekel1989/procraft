@@ -113,9 +113,11 @@ ProCraft's margins:
   sends previews, §B6).
 - **Tap a thumbnail** to show it on the canvas (a preview drawn over the canvas, masked to the
   selection when there was one). **Tap it again** to hide it and compare with the original.
-- **Apply** adds the shown result as a **new layer above the current one**, named
+- **Apply** adds the shown result as a **new layer at the top of the stack**, named
   "Generated · <first words of the prompt>", masked to the selection (with its feather) if there
   was one. One undo step ("Generate"). The bar stays, so another result can be applied too.
+  *(M2: at the top rather than above the current layer, because the preview shows over every
+  layer (§B8); the layer lands exactly where the preview showed it.)*
 - **Again** runs the same settings with a new random seed (the fixed seed if locked).
 - **Seed** shows the shown result's seed; tapping copies it into the popover's seed (locked).
 - **✕** discards the results (asks first if none was applied) and closes the bar.
@@ -160,9 +162,13 @@ ProCraft's margins:
 - Named **"Control layer"**, the term ComfyUI users know (§D3); it also stays clear of ProCraft's
   own "Guide" and "Reference".
 
-## A7. Settings: Actions › Prefs › Image generation
+## A7. Settings: the Generate popover's server view
 
-A sub-page of the Prefs tab, reached like "Pressure and Smoothing":
+*(M2: the settings live in the Generate popover, as its server view, rather than as a Prefs
+sub-page: they need text that changes (versions, what's missing), which the Actions panel's rows
+don't carry, and everything generation-related stays in one place.)* Reached from the connection dot
+in the popover's title, from "Set up" when no server is set, and from a row **Actions › Prefs ›
+Image generation** that opens the popover on it. Its content:
 
 - **Server** — address field (`http://<LAN address>:8189`; `http://` added if left out; port 8188
   assumed if none), and **Connect**.
@@ -252,8 +258,16 @@ Two objects:
 
 - **`Generation`** — app-wide: the connection, the worker, styles, tags. Created once by the app with
   the settings.
-- **The artwork's part** — methods on `CanvasSession` taking `&Generation`: the run, results,
-  previews, control layers. Results belong to the artwork.
+- **The artwork's part** — the run, results and previews, held in `Generation` for the open
+  artwork; its methods take the artwork's `CanvasSession`, and a different session drops the last
+  one's run and results. *(M2: kept in `Generation` rather than added to `CanvasSession`'s state, so
+  ProCraft's own session needs no new fields: the core change is one new module and a few lines.)*
+
+As built in M2 (`crates/core/src/generation.rs`): `Generation::new(settings)`, `set_settings`,
+`connect`, `server() -> ServerStatus`, `styles() -> Vec<StyleInfo>`, `generate(session, RunSettings)`,
+`cancel`, `state() -> GenerationState`, `show_result(session, Option<id>)`,
+`apply_result(session, id) -> Option<layer>`, `discard_results(session)`, `leave(session)`, and
+`generation_address(text)`. The sketch below was the plan.
 
 ```rust
 // app-wide
@@ -410,14 +424,18 @@ context box):
 
 ## B8. Previews on the canvas
 
-Previews are **not layers**. The renderer gets a small new feature: an **overlay** — one RGBA image
-with a canvas rectangle and an optional mask, composited directly above the current layer when the
-picture is drawn. `Canvas::set_overlay(Option<Overlay>)`. It never enters the document, history,
-saves, exports or the time-lapse.
+Previews are **not layers**. The renderer gets a small new feature: an **overlay**, one picture
+over a canvas rectangle, shown in the window and nowhere else. It never enters the document,
+history, saves, exports or the time-lapse.
 
-This is the one change inside ProCraft's renderer. It is the first thing M2 builds (a short spike),
-since the rest of the results flow depends on it. Fallback if it proves awkward: a temporary private
-layer added and removed outside history.
+*As built (M2):* `Canvas::set_overlay(gpu, Option<(IRect, &[u8])>)` and `has_overlay()`. It's drawn
+in the **display pass**, right after the finished picture and before the selection's marching ants,
+with the same display pipeline (so it gets the screen's colour conversion and zoom). So it shows
+**over every layer**, not just above the current one: compositing it into the layer stack itself
+would have touched the live-cache, group and clipping paths of a 12k-line renderer that ProCraft
+changes often. Apply therefore puts the layer at the top (§A4), and a selection's mask is baked into
+the overlay's alpha before it's sent. Tested: `crates/gpu/tests/canvas.rs`
+`an_overlay_shows_over_the_canvas_in_the_window_only`.
 
 ## B9. Styles
 
@@ -491,10 +509,15 @@ A style (`styles/anima.json`, our own file):
   `procraft-desktop` feature `generation` (on by default in our fork) enabling its UI modules;
   `procraft-gpu`'s overlay is small and always built (no network in it).
 - **Gradle**: property `procraft.generation` (default on in the fork) passes `--features generation`
-  to cargo-ndk and switches source sets: `src/generation/` holds the Kotlin UI, the manifest overlay
-  (`INTERNET`, `android:usesCleartextTraffic="true"` — the server is plain HTTP on the LAN; Android
-  can't allow-list a host typed at run time) and the real `GenerationUi` object; `src/noGeneration/`
-  holds a `GenerationUi` that draws nothing. The shared UI code calls `GenerationUi` only.
+  to cargo-ndk and picks the Kotlin source folder: `src/generation/java` holds the real
+  `GenerationUi` object, `src/noGeneration/java` one that draws nothing. The shared UI code calls
+  `GenerationUi` only. *(As built, M2:)* the manifest isn't swapped (Android merges one main
+  manifest); it takes two placeholders instead: `${networkPermission}` (`INTERNET`, or an unused
+  permission name when off) and `${cleartext}` for `android:usesCleartextTraffic` (the server is
+  plain HTTP on the LAN; Android can't allow-list a host typed at run time).
+- **Icon** *(M2)*: "AI" is defined in code (three stroked capsules, `desktop/src/generation.rs` and
+  `GenerationUi.kt`) rather than drawn by `tools/icons/draw_icons.py`; moving it into that pipeline
+  (master SVG, `ATTRIBUTION.md`) is upstream-preparation work.
 - With the switch off, ProCraft builds and behaves exactly as upstream.
 
 ---
@@ -563,10 +586,26 @@ it is accepted when it rebuilds our dev instance from nothing and the app passes
 | Milestone | Steps |
 |---|---|
 | **M1 Foundations** ✅ | fork + branch; `crates/diffusion` skeleton; graph builder; `Comfy` client (HTTP + WS); requirements check; Anima family: generate + refine; planner; a `diffusion-cli` test harness (`generate "prompt" -o out.png`); unit + dev-server tests |
-| **M2 Generate on the tablet** | renderer overlay spike; `generation.rs` in core + UniFFI; `generation` switches (Cargo, Gradle, manifest); Android: button, icon, popover (prompt, styles, strength, seed, count), results bar, Prefs page, states; desktop: the same; on-device pass |
+| **M2 Generate on the tablet** ✅ | renderer overlay spike; `generation.rs` in core + UniFFI; `generation` switches (Cargo, Gradle, manifest); Android: button, icon, popover (prompt, styles, strength, seed, count), results bar, Prefs page, states; desktop: the same; on-device pass |
 | **M3 Selections** | selection graphs + modes; mode guess; Selection toolbar button; tuning grow/blur/colour match on real pictures |
 | **M4 Control layers + autocomplete** | engine `control` property; layer menu row + badge; popover rows; control image preparation; tag files, index, suggestion strip, recent prompts |
 | **M5 Companion** | `procraft-companion` install / models / check / start / stop; model list with hashes; Windows pass; rebuild the dev instance with it |
+
+### M2 as delivered (2026-11-05)
+
+Tested on the test tablet against the dev ComfyUI over `adb reverse`: set up the server, generate
+two pictures (live previews, progress on the button and in the bar), preview on the canvas, Apply
+(layer at the top, refreshed in the Layers panel), refine at 50 % on a P3 canvas, one undo removing
+an applied layer. Fixed on the device: the keyboard covering Generate (the popover now shrinks above
+it and Generate stays outside the scrolling part), Apply not refreshing Android's layer list, a
+pill drawn opaque. Desktop builds and is lint-clean with the feature on and off, but hasn't been
+tried by hand yet.
+
+Not done yet, carried forward:
+- **A stroke hiding the preview** (§A4): previews stay until tapped off. Needs a hook where a stroke
+  starts; to add with M3.
+- **The icon in `draw_icons.py`** (§B13) and the "Image generation" row's place in the Prefs tab
+  (after Gesture controls).
 
 ## D3. Decisions
 
