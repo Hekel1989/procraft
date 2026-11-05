@@ -78,7 +78,25 @@ impl Style {
             self.template.replace("{rating}", if nsfw { "" } else { "safe" }).replace("{prompt}", prompt.trim());
         filled.split(',').map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(", ")
     }
+
+    /// The negative prompt to send, with `extra` after the style's own: and unless `nsfw`, the
+    /// ratings and words that keep pictures safe (the `safe` tag alone isn't enough for Anima,
+    /// least of all with an empty or vague prompt).
+    pub fn negative_for(&self, extra: &str, nsfw: bool) -> String {
+        let safe = if nsfw { "" } else { SAFE_NEGATIVE };
+        [self.negative.as_str(), extra, safe]
+            .join(",")
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
+
+/// Added to the negative prompt while NSFW is off.
+const SAFE_NEGATIVE: &str =
+    "nsfw, explicit, questionable, sensitive, nude, nudity, sexual, underwear, lingerie, cleavage";
 
 /// The styles a server can run: the built-in ones whose checkpoint it has, then one for each other
 /// checkpoint of the same families, named from its file.
@@ -110,6 +128,15 @@ fn name_of(file: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nsfw_off_keeps_the_negative_safe() {
+        let style = super::written().into_iter().next().unwrap().with("x.safetensors");
+        let off = style.negative_for("object", false);
+        assert!(off.starts_with(&style.negative), "{off}");
+        assert!(off.contains("object, nsfw"), "{off}");
+        assert!(!style.negative_for("", true).contains("nsfw"));
+    }
+
     use super::*;
 
     fn models(files: &[&str]) -> ServerModels {

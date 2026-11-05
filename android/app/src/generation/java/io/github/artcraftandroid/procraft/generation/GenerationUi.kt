@@ -249,10 +249,15 @@ object GenerationUi {
                 ServerConnection.FAILED -> BAD to s.address
                 else -> BAD to "not set up"
             }
-            Row(Modifier.padding(top = 8.dp).tap { view = View.SERVER }, verticalAlignment = Alignment.CenterVertically) {
+            // the server, as a button: its settings (address, NSFW, largest picture) behind it
+            Row(
+                Modifier.clip(RoundedCornerShape(10.dp)).background(RowFill).tap { view = View.SERVER }.padding(start = 10.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Box(Modifier.size(9.dp).clip(CircleShape).background(colour))
                 Spacer(Modifier.width(7.dp))
-                Text(words, color = Dim, fontSize = 13.sp, maxLines = 1)
+                Text(words, color = Ink, fontSize = 13.sp, maxLines = 1)
+                Text("  ›", color = Dim, fontSize = 17.sp, maxLines = 1)
             }
         }
     }
@@ -556,7 +561,9 @@ object GenerationUi {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState(), reverseScrolling = true), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            val scroll = rememberScrollState()
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            Row(Modifier.horizontalScroll(scroll, reverseScrolling = true), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 for (r in state.results) {
                     val bitmap = bitmaps[r.id] ?: continue
                     val shape = RoundedCornerShape(10.dp)
@@ -574,6 +581,15 @@ object GenerationUi {
                     }
                 }
                 state.error?.let { Text(it, color = WARN, fontSize = 12.sp, maxLines = 2, modifier = Modifier.widthIn(max = 260.dp)) }
+            }
+            // older results off to the left: a fade and a ‹ say so (newest are at the right)
+            if (scroll.value < scroll.maxValue) {
+                val bar = if (Pc.light) Color(0xF7F1F1F1) else Color(0xF0202020)
+                Box(
+                    Modifier.width(44.dp).height(66.dp).background(androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(bar, bar.copy(alpha = 0f)))),
+                    contentAlignment = Alignment.CenterStart,
+                ) { Text("‹", color = Ink, fontSize = 26.sp, modifier = Modifier.padding(start = 2.dp)) }
+            }
             }
             state.results.firstOrNull { it.id == target }?.let { r ->
                 Box(Modifier.clip(RoundedCornerShape(10.dp)).background(RowFill).tap { seed = r.seed }.padding(horizontal = 10.dp, vertical = 7.dp)) {

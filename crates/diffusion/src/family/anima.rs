@@ -73,9 +73,9 @@ pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerMod
     let prompt = if removing { "" } else { request.prompt.as_str() };
     let positive = text(&mut g, style.positive(prompt, request.nsfw));
     let negative = if removing {
-        text(&mut g, format!("{}, object, person, text", style.negative))
+        text(&mut g, style.negative_for("object, person, text", request.nsfw))
     } else {
-        text(&mut g, style.negative.clone())
+        text(&mut g, style.negative_for("", request.nsfw))
     };
     let mut model: Out = checkpoint.out(0);
     let sampler = |g: &mut Graph, model: Out, latent: Out, denoise: f64| {
@@ -385,9 +385,12 @@ mod tests {
         let g = built.to_json();
         let texts = built.nodes_of("CLIPTextEncode");
         assert_eq!(g[&texts[0]]["inputs"]["text"], "masterpiece, best quality, safe");
-        assert_eq!(
-            g[&texts[1]]["inputs"]["text"],
-            "worst quality, low quality, blurry, jpeg artifacts, watermark, signature, object, person, text"
+        let negative = g[&texts[1]]["inputs"]["text"].as_str().unwrap();
+        assert!(
+            negative.starts_with(
+                "worst quality, low quality, blurry, jpeg artifacts, watermark, signature, object, person, text, nsfw"
+            ),
+            "{negative}"
         );
     }
 
