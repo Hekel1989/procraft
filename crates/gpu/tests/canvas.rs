@@ -3,7 +3,7 @@
 
 use procraft_engine::brush::{Brush, Rendering, Taper};
 use procraft_engine::document::Document;
-use procraft_engine::geom::{Homography, Vec2};
+use procraft_engine::geom::{Homography, IRect, Vec2};
 use procraft_engine::input::{Pointer, Sample};
 use procraft_engine::profile::Profile;
 use procraft_engine::stroke::{Stamp, StrokeBuilder, Tint};
@@ -276,6 +276,69 @@ fn draws_to_a_target_through_the_view() {
     assert_eq!(pixel(&px, 200, 10, 50), [51, 51, 51, 255], "surround");
     assert_eq!(pixel(&px, 200, 75, 25), [0, 0, 0, 255], "the dot");
     assert_eq!(pixel(&px, 200, 125, 75), [255, 255, 255, 255], "canvas");
+}
+
+#[test]
+fn an_overlay_shows_over_the_canvas_in_the_window_only() {
+    let Some(gpu) = gpu() else { return };
+    let _check = NoErrors(&gpu);
+    let mut doc = Document::new(100, 100);
+    let mut canvas = Canvas::new(&gpu, &doc).unwrap();
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d { width: 100, height: 100, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&Default::default());
+    let show = |canvas: &mut Canvas, doc: &mut Document| {
+        canvas.render(
+            &gpu,
+            doc,
+            Some(Target {
+                view: &view,
+                format,
+                size: (100, 100),
+                to_screen: View::fit((100, 100), (100, 100)).to_screen(),
+                surround: [0.2, 0.2, 0.2],
+                grid: None,
+                selection: None,
+                backdrop: None,
+                convert: None,
+                lut: None,
+                crisp_from: f32::INFINITY,
+                grey: false,
+            }),
+        );
+        read(&gpu, &target, 100, 100)
+    };
+    // opaque red over the top right quarter, half see-through blue over the bottom left one
+    let red = [255, 0, 0, 255].repeat(50 * 50);
+    canvas.set_overlay(&gpu, Some((IRect::new(50, 0, 100, 50), &red))).unwrap();
+    assert!(canvas.has_overlay());
+    let px = show(&mut canvas, &mut doc);
+    assert_eq!(pixel(&px, 100, 75, 25), [255, 0, 0, 255], "the overlay");
+    assert_eq!(pixel(&px, 100, 25, 75), [255, 255, 255, 255], "the canvas beside it");
+    let blue = [0, 0, 128, 128].repeat(50 * 50);
+    canvas.set_overlay(&gpu, Some((IRect::new(0, 50, 50, 100), &blue))).unwrap();
+    let px = show(&mut canvas, &mut doc);
+    let mixed = pixel(&px, 100, 25, 75);
+    assert!(mixed[0].abs_diff(127) <= 2 && mixed[2] == 255, "half blue over white: {mixed:?}");
+    assert_eq!(pixel(&px, 100, 75, 25), [255, 255, 255, 255], "only the latest overlay shows");
+    // never in the picture itself
+    canvas.render_finished(&gpu, &mut doc);
+    let composite = canvas.read_composite(&gpu).unwrap();
+    assert_eq!(pixel(&composite, 100, 25, 75), [255, 255, 255, 255]);
+    // and gone when taken away
+    canvas.set_overlay(&gpu, None).unwrap();
+    assert_eq!(pixel(&show(&mut canvas, &mut doc), 100, 25, 75), [255, 255, 255, 255]);
+    // a size that doesn't match its pixels is refused
+    assert!(canvas.set_overlay(&gpu, Some((IRect::new(0, 0, 10, 10), &red))).is_err());
 }
 
 #[test]

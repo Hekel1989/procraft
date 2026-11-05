@@ -330,6 +330,13 @@ pub struct Target<'a> {
     pub grey: bool,
 }
 
+/// A picture over the canvas that isn't part of it: its texture and where it goes (canvas pixels).
+struct Overlay {
+    bind: wgpu::BindGroup,
+    rect: IRect,
+    _texture: wgpu::Texture,
+}
+
 /// A colour table on the GPU for [`Target::lut`].
 pub struct DisplayLut {
     bind: wgpu::BindGroup,
@@ -1544,6 +1551,8 @@ pub struct Canvas {
     /// The picture as shown: smoothed between its pixels, or each a square ([`Target::crisp_from`]).
     display_bind: wgpu::BindGroup,
     crisp_bind: wgpu::BindGroup,
+    /// A picture shown over the canvas in the window only (see [`Canvas::set_overlay`]).
+    overlay: Option<Overlay>,
     /// The table that leaves colours as they are, bound when a target has none.
     identity_lut: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
@@ -1837,6 +1846,7 @@ impl Canvas {
             stroke_bind,
             display_bind,
             crisp_bind,
+            overlay: None,
             identity_lut,
             uniform_buffer,
             uniform_bind,
@@ -3001,6 +3011,44 @@ impl Canvas {
 
     pub fn has_selection(&self) -> bool {
         self.selection.is_some()
+    }
+
+    /// Shows `rgba` (premultiplied RGBA8 in the canvas's colours, `rect`'s size) over the canvas
+    /// at `rect`, above every layer, in the window only: never in the composite, what is read back,
+    /// saved or recorded. None takes it away. For a picture offered before it is added (a
+    /// generated result); its transparency shows the canvas through.
+    pub fn set_overlay(&mut self, gpu: &Gpu, overlay: Option<(IRect, &[u8])>) -> Result<(), GpuError> {
+        let Some((rect, rgba)) = overlay else {
+            self.overlay = None;
+            return Ok(());
+        };
+        let (w, h) = (rect.width(), rect.height());
+        if rect.is_empty() || rgba.len() != w as usize * h as usize * 4 {
+            return Err(GpuError::Readback(format!("overlay: {} bytes for {w} × {h}", rgba.len())));
+        }
+        let device = &gpu.device;
+        let texture = texture(device, "overlay", w, h, LAYER_FORMAT);
+        gpu.queue.write_texture(
+            copy_at(&texture, 0, 0),
+            rgba,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
+            extent(w, h),
+        );
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("overlay"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind = sampled_bind(device, &self.pipelines.sampled_layout, &view, &sampler);
+        self.overlay = Some(Overlay { bind, rect, _texture: texture });
+        Ok(())
+    }
+
+    /// Whether an overlay is shown ([`Canvas::set_overlay`]).
+    pub fn has_overlay(&self) -> bool {
+        self.overlay.is_some()
     }
 
     /// Copies `layer` aside to transform it (ending a transform still open, kept).
@@ -6236,6 +6284,23 @@ impl Canvas {
         pass.set_bind_group(1, &self.uniform_bind, &[offset]);
         pass.set_bind_group(2, target.lut.map_or(&self.identity_lut, |l| &l.bind), &[]);
         pass.draw(0..6, 0..1);
+
+        // the overlay over it, through the same pipeline, its unit square stretched to its rect
+        if let Some(o) = &self.overlay {
+            let r = o.rect;
+            let unit_to_rect =
+                Affine { a: r.width() as f32, b: 0.0, c: 0.0, d: r.height() as f32, e: r.x0 as f32, f: r.y0 as f32 };
+            let m = unit_to_rect.then(target.to_screen).then(to_clip);
+            let offset = uniforms.push(&DisplayUniform::new(
+                [m.a, m.b, m.c, m.d],
+                [m.e, m.f, if srgb { 1.0 } else { 0.0 }, if target.grey { 1.0 } else { 0.0 }],
+                target.convert,
+                target.lut.is_some(),
+            ));
+            pass.set_bind_group(0, &o.bind, &[]);
+            pass.set_bind_group(1, &self.uniform_bind, &[offset]);
+            pass.draw(0..6, 0..1);
+        }
 
         // the selection: bands over what is not selected, or what is selected tinted or covered
         if let (Some(look), Some(selection), Some(inverse)) =
