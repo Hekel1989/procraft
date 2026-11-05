@@ -2,10 +2,12 @@ name: Upstream sync
 
 # ProCraft Diffusion follows ProCraft (artcraft-android/procraft). Daily at 08:00 London time, and by hand (Actions >
 # Upstream sync > Run workflow), this merges ProCraft's latest main into main-diffusion on the
-# runner, then runs ProCraft's own checks and ours. Nothing lands on main-diffusion by itself:
-# - merged and passing: the result is pushed to the branch sync/upstream, ready to take in
-#   (`git merge origin/sync/upstream`, or ask the agent);
+# runner, then runs ProCraft's own checks and ours. It only checks: nothing is pushed anywhere.
+# - merged and passing: the run passes, and its summary says how many commits are ready to take
+#   in (`git fetch upstream && git merge upstream/main` on main-diffusion, or ask the agent);
 # - a conflict or a failing check: the run fails (GitHub emails), and its summary says what.
+# (Pushing the merge from here isn't possible: GitHub refuses pushes from a workflow's own token
+# that carry workflow files, and a personal token would be a secret to look after.)
 on:
   # 08:00 in London is 08:00 UTC in winter and 07:00 UTC in summer: both are scheduled, and the
   # run that isn't 08:00 in London stops at once (GitHub may start a scheduled run a few minutes late)
@@ -15,7 +17,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: upstream-sync
@@ -98,12 +100,11 @@ jobs:
         if: steps.merge.outputs.new != '0'
         working-directory: android
         run: ./gradlew --no-daemon :app:assembleDebug -Pprocraft.abis=arm64-v8a
-      - name: Hand over
+      - name: Report
         if: steps.merge.outputs.new != '0'
         run: |
-          git push --force origin HEAD:refs/heads/sync/upstream
           {
             echo "## Ready: ${{ steps.merge.outputs.new }} ProCraft commits merge cleanly and pass"
             echo
-            echo 'Take them in with `git merge origin/sync/upstream` on main-diffusion (or ask the agent).'
+            echo 'Take them in with `git fetch upstream && git merge upstream/main` on main-diffusion (or ask the agent).'
           } >> "$GITHUB_STEP_SUMMARY"

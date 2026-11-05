@@ -42,9 +42,11 @@ ProCraft's own design language. It goes upstream later.
   2026-11-05). `main` is a copy of ProCraft's: on GitHub, "Sync fork" is safe there, never on
   `main-diffusion` (its "Discard commits" would throw our work away).
 - **Following upstream**: merge ProCraft's `main` (remote `upstream`) into `main-diffusion` often,
-  so conflicts stay small. `.github/workflows/upstream-sync.yml` tries it daily on GitHub: when
-  it merges and passes, the result is on `origin/sync/upstream` (`git merge origin/sync/upstream`);
-  when not, the run fails with the files to resolve in its summary.
+  so conflicts stay small. `.github/workflows/upstream-sync.yml` tries it daily at 08:00 London
+  time on GitHub and only checks (it can't push: GitHub refuses workflow-file pushes from its
+  token). A passing run means `git fetch upstream && git merge upstream/main` here gives the same
+  clean merge; a failing one lists the conflicting files or the failing check in its summary.
+  `gh` needs `-R Hekel1989/procraft` (it otherwise picks ProCraft's repository).
 - **Keep the hooks into ProCraft's own files thin**: new code goes in our own files (the
   `generation` modules, `crates/diffusion`, `android/app/src/generation`) and connects with a line
   or two. The usual conflict spots: `crates/core/src/lib.rs`, `desktop/src/ui.rs`,
@@ -119,7 +121,7 @@ prose. Commits are semantic (`feat(…)`, `fix(…)`, `docs(…)`, `tune(…)`) 
 
 test tablet, 2800 × 2000, landscape (screenshots are 2800 wide; scale 2.5 from the 1120-dp
 layout). Run `adb reverse tcp:8189 tcp:8189`, then the server on the tablet is `127.0.0.1:8189`.
-Package `io.github.artcraftandroid.procraft.debug`. Install with
+Package `io.github.hekel1989.procraftdiffusion.debug` (the old ProCraft debug app beside it holds the user's own artworks). Install with
 `adb install -r android/app/build/outputs/apk/debug/*.apk`.
 
 ## Anima tuning (in `family/anima.rs`)
@@ -134,8 +136,10 @@ Package `io.github.artcraftandroid.procraft.debug`. Install with
 ## Status (2026-11-05)
 
 - **Done:** M1 (foundations, CLI), M2 (Generate on the tablet and desktop), M3 (generation
-  resolution Draft/Normal/Quality, selections Fill/Add/Remove/Expand, Selection-toolbar button).
-- **Next:** M4 (control layers, tag autocomplete), M5 (the companion CLI).
+  resolution Draft/Normal/Quality, selections Fill/Add/Remove/Expand, Selection-toolbar button),
+  M4 (control layers Line art/Scribble with four steps Loose/Balanced/Close/Strict, made from
+  what's visible too; tag autocomplete with exact, prefix, then alias matches).
+- **Next:** M5 (the companion CLI).
 - **After Phase 1:** style editing.
 - **Since M3:** results are kept with their artwork in its private `generation/` folder (the
   newest 24; thumbnails in memory, full pictures on disk, read when shown or applied). Holding a
