@@ -82,20 +82,20 @@ impl Format {
 pub fn app_dir() -> PathBuf {
     let home = || std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
     if cfg!(windows) {
-        std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(home).join("ProCraft")
+        std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(home).join(crate::APP_NAME)
     } else if cfg!(target_os = "macos") {
-        home().join("Library/Application Support/ProCraft")
+        home().join("Library/Application Support").join(crate::APP_NAME)
     } else {
         std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home().join(".local/share"))
-            .join("procraft")
+            .join(crate::APP_DIR)
     }
 }
 
 /// Shows a passing message with an OK button.
 pub fn say(text: &str) {
-    MessageDialog::new().set_level(MessageLevel::Info).set_title("ProCraft").set_description(text).show();
+    MessageDialog::new().set_level(MessageLevel::Info).set_title(crate::APP_NAME).set_description(text).show();
 }
 
 /// Whether the file at `path` holds brushes, by its name (a zip by what it holds): ours (a brush
@@ -574,7 +574,7 @@ pub fn read_png(path: &Path) -> Result<ThumbnailImage, String> {
 pub fn about() {
     MessageDialog::new()
         .set_level(MessageLevel::Info)
-        .set_title("ProCraft")
+        .set_title(crate::APP_NAME)
         .set_description(format!("Version {}", env!("PROCRAFT_VERSION")))
         .show();
 }

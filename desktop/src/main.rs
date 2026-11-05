@@ -4,6 +4,13 @@
 // no console window behind the app on Windows (a debug build keeps it, for the log)
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+/// The app's name, in its window, dialogs and settings: ProCraft Diffusion, the fork of ProCraft
+/// with image generation. Its data lives apart from ProCraft's, in [`APP_DIR`] (Linux) or a folder
+/// named after it.
+pub const APP_NAME: &str = "ProCraft Diffusion";
+/// The data folder's name on Linux.
+pub const APP_DIR: &str = "procraft-diffusion";
+
 mod actions;
 mod adjust_panels;
 mod adjustments;
@@ -287,7 +294,7 @@ impl ApplicationHandler for App {
             return;
         }
         let attributes = Window::default_attributes()
-            .with_title("ProCraft")
+            .with_title(APP_NAME)
             .with_window_icon(window_icon())
             .with_inner_size(LogicalSize::new(1440.0, 900.0))
             .with_min_inner_size(LogicalSize::new(640.0, 480.0))
@@ -661,9 +668,9 @@ impl App {
             let soon = Instant::now() + Duration::from_millis(50);
             self.again = Some(self.again.map_or(soon, |due| due.min(soon)));
         }
-        if self.title != "ProCraft" {
-            screen.window.set_title("ProCraft");
-            self.title = "ProCraft".into();
+        if self.title != APP_NAME {
+            screen.window.set_title(APP_NAME);
+            self.title = APP_NAME.into();
         }
         self.zoom_on();
         // Project canvas is black while the gallery shows

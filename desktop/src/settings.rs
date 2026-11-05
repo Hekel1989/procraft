@@ -176,7 +176,15 @@ pub fn show(ctx: &egui::Context, prefs: &mut Prefs) -> Option<Said> {
                 ui.add_space(MARGIN);
                 let (title, _) = ui.allocate_exact_size(vec2(width, 36.0), Sense::hover());
                 let inner = title.shrink2(vec2(MARGIN, 0.0));
-                text(ui.painter(), inner.left_center(), Align2::LEFT_CENTER, "ProCraft", 30.0, Weight::Bold, argb(INK));
+                text(
+                    ui.painter(),
+                    inner.left_center(),
+                    Align2::LEFT_CENTER,
+                    crate::APP_NAME,
+                    30.0,
+                    Weight::Bold,
+                    argb(INK),
+                );
                 let done = text(
                     ui.painter(),
                     inner.right_center() - vec2(8.0, 0.0),

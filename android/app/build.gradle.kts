@@ -124,7 +124,8 @@ android {
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
-        applicationId = "io.github.artcraftandroid.procraft"
+        // ProCraft Diffusion: its own app beside ProCraft, with its own artworks
+        applicationId = "io.github.hekel1989.procraftdiffusion"
         minSdk = minApi
         targetSdk = 36
         versionCode = appVersionCode

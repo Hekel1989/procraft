@@ -28,6 +28,24 @@ ProCraft's own design language. It goes upstream later.
 - **Machine**: Linux, a 24 GB GPU. The user's own Krita + ComfyUI setup is off limits (see
   Hard rules).
 
+## ProCraft Diffusion: a fork that follows ProCraft
+
+- The app is **ProCraft Diffusion** (decided 2026-11-05): its own Android app ID
+  (`io.github.hekel1989.procraftdiffusion`, `.debug` for debug builds) and desktop data folder
+  (`~/.local/share/procraft-diffusion`, `%APPDATA%\ProCraft Diffusion`), so it sits beside ProCraft
+  with its own artworks. The name lives in `desktop/src/main.rs` (`APP_NAME`, `APP_DIR`),
+  `android/app/src/main/res/values/strings.xml`, `SettingsActivity.kt`'s title and
+  `android/app/build.gradle.kts`'s `applicationId`. The Kotlin namespace, the `.procraft` file
+  format and the Linux window class stay ProCraft's. For an upstream PR, leave the rename out.
+- **Following upstream**: merge ProCraft's `main` (remote `upstream`) into `feat/generation` often,
+  so conflicts stay small. `.github/workflows/upstream-sync.yml` tries it daily on GitHub: when
+  it merges and passes, the result is on `origin/sync/upstream` (`git merge origin/sync/upstream`);
+  when not, the run fails with the files to resolve in its summary.
+- **Keep the hooks into ProCraft's own files thin**: new code goes in our own files (the
+  `generation` modules, `crates/diffusion`, `android/app/src/generation`) and connects with a line
+  or two. The usual conflict spots: `crates/core/src/lib.rs`, `desktop/src/ui.rs`,
+  `android/.../ui/Chrome.kt`, the layer menus, `crates/engine/src/document.rs`'s `Layer`.
+
 ## Where things are
 
 - `docs/generation/`: the source of truth. `01-brainstorm.md`, `02-proposal.md` (final),

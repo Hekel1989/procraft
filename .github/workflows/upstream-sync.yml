@@ -1,0 +1,101 @@
+name: Upstream sync
+
+# ProCraft Diffusion follows ProCraft (artcraft-android/procraft). Once a day, and by hand (Actions >
+# Upstream sync > Run workflow), this merges ProCraft's latest main into feat/generation on the
+# runner, then runs ProCraft's own checks and ours. Nothing lands on feat/generation by itself:
+# - merged and passing: the result is pushed to the branch sync/upstream, ready to take in
+#   (`git merge origin/sync/upstream`, or ask the agent);
+# - a conflict or a failing check: the run fails (GitHub emails), and its summary says what.
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: "1.99.0"
+  NDK_VERSION: "29.0.14206865"
+  BRANCH: feat/generation
+
+jobs:
+  sync:
+    name: Merge ProCraft's main and check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BRANCH }}
+          fetch-depth: 0
+      - name: Merge upstream
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/artcraft-android/procraft.git
+          git fetch --quiet upstream main
+          new=$(git rev-list --count HEAD..upstream/main)
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+          if [ "$new" = 0 ]; then
+            echo "Up to date with ProCraft's main." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! git merge --no-ff --no-edit -m "chore: merge ProCraft's main ($new commits)" upstream/main; then
+            {
+              echo "## $new new ProCraft commits conflict with ours"
+              echo
+              echo "Files to resolve by hand:"
+              git diff --name-only --diff-filter=U | sed 's/^/- /'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Merged $new ProCraft commits; checking." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-java@v4
+        if: steps.merge.outputs.new != '0'
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: dtolnay/rust-toolchain@master
+        if: steps.merge.outputs.new != '0'
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: aarch64-linux-android
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        if: steps.merge.outputs.new != '0'
+      # ProCraft's checks, then ours (generation is off in procraft-core by default)
+      - name: Rust
+        if: steps.merge.outputs.new != '0'
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo clippy -p procraft-core --features generation --all-targets -- -D warnings
+          cargo test --workspace
+          cargo test -p procraft-core --features generation --lib
+      - name: NDK and cargo-ndk
+        if: steps.merge.outputs.new != '0'
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          cargo install cargo-ndk --version "^4" --locked
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.merge.outputs.new != '0'
+      - name: Android
+        if: steps.merge.outputs.new != '0'
+        working-directory: android
+        run: ./gradlew --no-daemon :app:assembleDebug -Pprocraft.abis=arm64-v8a
+      - name: Hand over
+        if: steps.merge.outputs.new != '0'
+        run: |
+          git push --force origin HEAD:refs/heads/sync/upstream
+          {
+            echo "## Ready: ${{ steps.merge.outputs.new }} ProCraft commits merge cleanly and pass"
+            echo
+            echo 'Take them in with `git merge origin/sync/upstream` on feat/generation (or ask the agent).'
+          } >> "$GITHUB_STEP_SUMMARY"
