@@ -12,6 +12,9 @@ object GenerationUi {
     @Composable
     fun BarButton(vm: CanvasViewModel) = Unit
 
+    @Composable
+    fun SelectionButton(vm: CanvasViewModel, width: Dp) = Unit
+
     fun openServer() = Unit
 
     fun leave(vm: CanvasViewModel) = Unit

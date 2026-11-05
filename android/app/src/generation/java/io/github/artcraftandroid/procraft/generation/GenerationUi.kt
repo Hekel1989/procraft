@@ -75,6 +75,9 @@ import io.github.artcraftandroid.procraft.core.GenerationSettings
 import io.github.artcraftandroid.procraft.core.GenerationState
 import io.github.artcraftandroid.procraft.core.RunSettings
 import io.github.artcraftandroid.procraft.core.GenerationResolution
+import io.github.artcraftandroid.procraft.core.GenerationMode
+import io.github.artcraftandroid.procraft.core.SelectionInfo
+import io.github.artcraftandroid.procraft.ui.ToolbarButton
 import io.github.artcraftandroid.procraft.core.SizeInfo
 import io.github.artcraftandroid.procraft.core.ServerConnection
 import io.github.artcraftandroid.procraft.core.ServerStatus
@@ -129,6 +132,9 @@ object GenerationUi {
     private var seed by mutableStateOf<ULong?>(null)
     private var count by mutableStateOf(1)
     private var resolution by mutableStateOf(GenerationResolution.QUALITY)
+    // the selection's mode as picked (none: the guess), and the selection it was picked for
+    private var mode by mutableStateOf<GenerationMode?>(null)
+    private var modeFor: SelectionInfo? = null
     private var address by mutableStateOf("")
     private var state by mutableStateOf(GenerationState(null, emptyList(), null, null))
     private var server by mutableStateOf<ServerStatus?>(null)
@@ -190,6 +196,15 @@ object GenerationUi {
         Box(contentAlignment = Alignment.Center) {
             ActionButton(Icon, "Generate", selected = vm.panel == Panel.GENERATE, glyph = 40.dp) { vm.toggle(Panel.GENERATE) }
             state.running?.let { ProgressRing(it.progress, Modifier.size(Pc.ActionDiscSize + 5.dp)) }
+        }
+    }
+
+    /** The Selection toolbar's Generate button: closes the tool and opens the popover. */
+    @Composable
+    fun SelectionButton(vm: CanvasViewModel, width: Dp) {
+        ToolbarButton(Icon, "Generate", enabled = vm.hasSelection, width = width, iconSize = 40.dp) {
+            vm.closeSelecting()
+            if (vm.panel != Panel.GENERATE) vm.toggle(Panel.GENERATE)
         }
     }
 
@@ -322,6 +337,26 @@ object GenerationUi {
                     }
                 }
             }
+            // with a selection: how to fill it, the guess picked until another is
+            val selection = vm.session?.let { g.selection(it) }
+            if (selection != null && (modeFor?.x != selection.x || modeFor?.y != selection.y || modeFor?.width != selection.width || modeFor?.height != selection.height)) {
+                mode = null
+                modeFor = selection
+            }
+            if (selection != null) {
+                Label("SELECTION")
+                val chosen = mode ?: selection.mode
+                Row(Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(40.dp).clip(RoundedCornerShape(12.dp)).background(RowFill).padding(3.dp)) {
+                    for ((choice, words) in listOf(GenerationMode.FILL to "Fill", GenerationMode.ADD to "Add", GenerationMode.REMOVE to "Remove", GenerationMode.EXPAND to "Expand")) {
+                        val on = chosen == choice
+                        Box(
+                            Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(9.dp)).background(if (on) Pc.Accent else Color.Transparent).tap { mode = choice },
+                            contentAlignment = Alignment.Center,
+                        ) { Text(words, color = if (on) Color.White else Dim, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+            }
             // resolution: Draft, Normal, Quality, and what that makes in small text
             val context = LocalContext.current
             Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp).fillMaxWidth().height(40.dp).clip(RoundedCornerShape(12.dp)).background(RowFill).padding(3.dp)) {
@@ -342,7 +377,10 @@ object GenerationUi {
         Column(Modifier.padding(bottom = 16.dp)) {
             // Generate, or Cancel while a run goes
             val running = state.running
-            val ready = server?.connection == ServerConnection.CONNECTED && styles.isNotEmpty()
+            val selection = vm.session?.let { g.selection(it) }
+            val picked = selection?.let { mode ?: it.mode }
+            val needsPrompt = picked == GenerationMode.ADD && prompt.isBlank()
+            val ready = server?.connection == ServerConnection.CONNECTED && styles.isNotEmpty() && !needsPrompt
             val words = when {
                 running != null -> "Cancel · ${(running.progress * 100).toInt()}%"
                 count > 1 -> "Generate $count"
@@ -354,10 +392,11 @@ object GenerationUi {
                     .background(if (ready || running != null) fill else fill.copy(alpha = 0.4f))
                     .tap {
                         focus.clearFocus()
-                        if (running != null) g.cancel() else if (ready) run(vm, g, RunSettings(prompt, style, strength, seed, count.toUInt(), resolution))
+                        if (running != null) g.cancel() else if (ready) run(vm, g, RunSettings(prompt, style, strength, seed, count.toUInt(), resolution, picked))
                     },
                 contentAlignment = Alignment.Center,
             ) { Text(words, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold) }
+            if (needsPrompt && running == null) Text("Add needs a prompt: say what to put there.", color = Dim, fontSize = 13.sp, modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 10.dp))
             (error ?: state.error)?.let { Text(it, color = WARN, fontSize = 13.sp, modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 10.dp)) }
         }
     }

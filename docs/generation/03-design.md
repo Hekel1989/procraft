@@ -467,6 +467,15 @@ passes when the target is much bigger than the model's size).
 - *Built:* a megapixel is 1,000,000 pixels. Both make two passes above 1.5 × the model's pixels
   (so Normal on 2800 × 2000, 1400 × 1000, is one pass at 1408 × 1008). Refining is one pass at the
   target, never below the model's own size.
+- *Tuned on the dev server (2026-11-05):* Anima's passes are made at **3 MP at most**, whatever the
+  GPU could take: a second pass at 5.6 MP (2800 × 2000) came out soft with a faint grid, while 2–3 MP
+  added clean line detail over Draft. Bigger targets are made at 3 MP and scaled up the rest (≈ 1.37×
+  for 2800 × 2000, under the note's 1.5×). The second pass refines at **0.3**: at 0.4 it changed
+  details such as eye colour. Times on a 24 GB GPU, Anima style, 2800 × 2000: Draft ≈ 10 s warm,
+  Quality (2048 × 1456, 2 passes) ≈ 33 s. The small text says "capped at 3 MP" there.
+- *Selections, tried:* Add (a black cat on a table) and Remove (a vase) work at inpaint control
+  strength 1.0; Remove at 100 % sometimes puts a small new object back. Fill on the tablet (a full
+  moon in an ellipse of night sky) blends with no visible edge.
 
 ## B8. Previews on the canvas
 
