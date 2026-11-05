@@ -6,6 +6,28 @@ This is a fork of [ProCraft](https://github.com/artcraft-android/procraft) (`Hek
 branch `feat/generation`, adding AI image generation in the spirit of krita-ai-diffusion, in
 ProCraft's own design language. It goes upstream later.
 
+## How the user works
+
+- **Process: brainstorm, then a finalised proposal, then a design, and only then code.** Each
+  step is discussed and agreed with the user before the next. Phase 1 went through all three
+  (`docs/generation/01–03`). Phase 2 and later need the same: today they are only a direction
+  (proposal §8, brainstorm's feature table), with no design.
+- **Keep it simple**: no overcomplication. Prefer the plain solution that works.
+- **The user decides genuine choices.** Offer two or three options with a recommendation; explain
+  any question in plain words, with a concrete example. When the answer is obvious, pick it and
+  say so.
+- **Mobile first**: the Android tablet is the main target, and it must work and look right on
+  both Android and desktop, in ProCraft's design language.
+- **Commit and push only when asked.** Docs and `dev/` are tracked with the code.
+- **When the user asks for the "Opus/DeepSeek workflow"**, use the `deepseek-orchestrate` skill
+  (see the end of this file); the user cares about saving Claude usage.
+- **Order after Phase 1**: style editing comes first in Phase 2.
+- **Several sessions at once**: a session doing new design work writes its own new documents
+  (e.g. `docs/generation/04-phase2-brainstorm.md`) and doesn't edit files another session is
+  changing; agree with the user before touching `03-design.md` or code.
+- **Machine**: Linux, a 24 GB GPU. The user's own Krita + ComfyUI setup is off limits (see
+  Hard rules).
+
 ## Where things are
 
 - `docs/generation/`: the source of truth. `01-brainstorm.md`, `02-proposal.md` (final),
