@@ -154,19 +154,35 @@ ProCraft's margins:
 
 ## A6. Control layers
 
-- **Making one**: the layer's options menu gets a row **"Control layer"** (beside Reference and
-  Drawing Assist) opening a small menu: **None** · **Line art** · **Scribble**.
+- **Making one**: the layer's options menu has a row **"Control layer"** (beside Reference and
+  Drawing Assist) opening a small menu: **None** · **Line art** · **Scribble** ·
+  **Line art from picture** · **Scribble from picture**.
   - Line art: clean lines, followed closely. Scribble: rough strokes, followed loosely.
-- **In the Layers panel** the layer gets a small badge left of its blend letter ("N"): a solid glyph
-  for line art, a looser one for scribble. Otherwise it's a normal layer: it's painted, hidden,
-  moved as usual.
-- **In the popover** each control layer has its row with strength (default 70 % line art, 50 %
-  scribble) and a remove button.
+  - **…from picture** *(decided 2026-11-05, brought forward from Phase 2)*: what's visible (the
+    whole canvas, or inside the selection when there is one; control layers left out) goes to the
+    server's extractor, and the lines come back as a **new layer** just above the current one —
+    black lines on transparent, already a control layer of that kind, named "Line art (from
+    picture)" / "Scribble (from picture)". Nothing is overwritten: the lines can be erased, painted
+    over, hidden or deleted. One undo step ("Control layer from picture"). The run shows the usual
+    progress ring; Cancel stops it. Extractors (from `comfyui_controlnet_aux`, tuned on the dev
+    server, never named in the UI): line art `AnimeLineArtPreprocessor`, scribble
+    `Scribble_PiDiNet_Preprocessor` — the first choice, kept if they look right on real pictures.
+    Needs the add-on, checked like the others (§B12); without it the two rows are disabled with
+    "needs comfyui_controlnet_aux".
+- **In the Layers panel**: Android names it under the layer's name, the way ProCraft marks a
+  Reference layer ("Line art control" / "Scribble control"); desktop shows a small badge left of
+  the blend letter. Otherwise it's a normal layer: painted, hidden, moved as usual.
+- **In the popover** each control layer has its row: thumbnail, name, kind, **how closely to
+  follow it** in four steps — **Loose · Balanced · Close · Strict** — and a remove button.
+  **Balanced** is the default for both kinds *(decided 2026-11-05; replaces the 0–100 % slider)*.
+  Each step is a pair (strength, the share of the steps the control is applied for), as constants
+  in `family/anima.rs`, tuned on the dev server: Loose only shapes the start so the model can
+  drift; Strict holds the lines to the end.
 - **What is sent**: the control layer's own pixels (not the picture). Control layers are **left out
   of the picture** that is sent for refine and selections, so their lines don't get painted in as
   colour. Hidden control layers are ignored.
 - **Saved with the artwork** (a layer property; §B10). Hidden control layers keep their row (dimmed)
-  in the popover, so their strength is kept while they're off.
+  in the popover, so their step is kept while they're off.
 - Named **"Control layer"**, the term ComfyUI users know (§D3); it also stays clear of ProCraft's
   own "Guide" and "Reference".
 
