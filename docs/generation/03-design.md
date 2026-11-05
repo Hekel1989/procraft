@@ -450,8 +450,9 @@ passes when the target is much bigger than the model's size).
   1216 × 864"), the note M2 left out.
 - Expected cost on a 24 GB GPU for 2800 × 2000 with the Anima style: Draft ≈ 9 s; Quality roughly
   25–40 s (to measure when built); Anima Turbo much less.
-- *Built:* a megapixel is 1,000,000 pixels. Quality refines above 1.5 × the model's pixels; Normal
-  refines whenever its half-area target is still above the model's own plan (so 1400 × 1000 does).
+- *Built:* a megapixel is 1,000,000 pixels. Both make two passes above 1.5 × the model's pixels
+  (so Normal on 2800 × 2000, 1400 × 1000, is one pass at 1408 × 1008). Refining is one pass at the
+  target, never below the model's own size.
 
 ## B8. Previews on the canvas
 

@@ -118,15 +118,14 @@ pub fn plan_for(width: u32, height: u32, pixels: u32, resolution: Resolution, la
     };
     let (target, capped) = capped(chosen, largest);
     if refine {
-        let size = grid(target);
+        let size = if target.pixels() < native.pixels() { native } else { grid(target) };
         return Plan { first: size, second: None, size, target, capped };
     }
     let target_pixels = target.pixels();
     let native_pixels = native.pixels();
     // A Normal target is a quarter of the area: when it is still above the model's own plan the
     // area is at least four times the model's size, so it is worth refining even under the cutoff.
-    let far = target_pixels > native_pixels
-        && (resolution == Resolution::Normal || target_pixels as f64 > native_pixels as f64 * TWO_PASS_FACTOR);
+    let far = target_pixels as f64 > native_pixels as f64 * TWO_PASS_FACTOR;
     if far {
         let second = grid(target);
         Plan { first: native, second: Some(second), size: second, target, capped }
@@ -220,9 +219,10 @@ mod tests {
     fn normal_gets_half_the_area() {
         let p = at(2800, 2000, Resolution::Normal, 6.0);
         assert_eq!(p.target, Size::new(1400, 1000));
-        assert_eq!(p.passes(), 2);
-        assert_eq!(p.first, Size::new(1216, 864));
-        assert_eq!(p.second, Some(Size::new(1408, 1008)));
+        assert_eq!(p.passes(), 1, "near the model's size: one pass");
+        assert_eq!(p.first, Size::new(1408, 1008));
+        let big = at(4000, 3000, Resolution::Normal, 6.0);
+        assert_eq!((big.target, big.passes()), (Size::new(2000, 1500), 2));
         assert!(p.stretched(2800, 2000, 1.5), "results are scaled up to the area");
     }
 
@@ -277,6 +277,8 @@ mod tests {
         assert_eq!(p.first, Size::new(2800, 2000));
         assert_eq!(p.second, None);
         assert_eq!(p.passes(), 1);
+        let small = plan_for(600, 400, MP, Resolution::Quality, 6.0, true);
+        assert_eq!(small.size, plan(600, 400, MP).size, "never below the model's size");
     }
 
     #[test]
