@@ -32,7 +32,7 @@ pub struct Address {
 }
 
 impl Address {
-    /// The address in `text` as people type it: `<LAN address>:8189`, `http://pc.local:8188/`,
+    /// The address in `text` as people type it: `192.168.1.10:8189`, `http://pc.local:8188/`,
     /// `localhost` (port 8188). None if there's no host or the port isn't a number.
     pub fn parse(text: &str) -> Option<Address> {
         let text = text.trim();
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn addresses_are_read_as_typed() {
         let at = |host: &str, port| Some(Address { host: host.to_owned(), port });
-        assert_eq!(Address::parse("<LAN address>:8189"), at("<LAN address>", 8189));
+        assert_eq!(Address::parse("192.168.1.10:8189"), at("192.168.1.10", 8189));
         assert_eq!(Address::parse(" http://pc.local:8188/ "), at("pc.local", 8188));
         assert_eq!(Address::parse("localhost"), at("localhost", DEFAULT_PORT));
         assert_eq!(Address::parse("pc:port"), None);

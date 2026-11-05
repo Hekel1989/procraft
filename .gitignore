@@ -10,3 +10,6 @@ replay_pid*.log
 # (XcodeGen)
 /ios/Generated/
 /ios/ProCraft.xcodeproj/
+
+# personal details of the machine, devices and paths this is developed on: never in git
+/dev/local.md

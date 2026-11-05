@@ -2,7 +2,9 @@
 
 ## The dev ComfyUI
 
-A separate ComfyUI for testing, at `<dev ComfyUI folder>/`. It shares nothing with
+A separate ComfyUI for testing, in a folder of its own: `setup-dev-comfyui.sh <folder>` (or
+`PROCRAFT_COMFY_ROOT=<folder>`). Personal details (paths, machine, devices) go in `dev/local.md`, which
+git ignores; never in tracked files, as the repository is public. It shares nothing with
 the Krita ComfyUI (`~/.local/share/krita/ai_diffusion/server`), which is never touched.
 
 - `setup-dev-comfyui.sh [root]` installs it (or brings it back to the pinned versions): Python 3.12 in

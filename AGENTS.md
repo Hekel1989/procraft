@@ -25,7 +25,8 @@ ProCraft's own design language. It goes upstream later.
 - **Several sessions at once**: a session doing new design work writes its own new documents
   (e.g. `docs/generation/04-phase2-brainstorm.md`) and doesn't edit files another session is
   changing; agree with the user before touching `03-design.md` or code.
-- **Machine**: Linux, a 24 GB GPU. The user's own Krita + ComfyUI setup is off limits (see
+- **This machine, the tablet and local paths** are in `dev/local.md` (not in git: never put
+  personal details in tracked files; the repository is public). The user's own Krita + ComfyUI setup is off limits (see
   Hard rules).
 
 ## ProCraft Diffusion: a fork that follows ProCraft
@@ -86,7 +87,7 @@ prose. Commits are semantic (`feat(…)`, `fix(…)`, `docs(…)`, `tune(…)`) 
 
 ## The dev ComfyUI
 
-- `<dev ComfyUI folder>/`, on **port 8189**. Start it with `start.sh` (or
+- The folder named in `dev/local.md` (`PROCRAFT_COMFY_ROOT`), on **port 8189**. Start it with `start.sh` (or
   `nohup …/start.sh > …/comfyui.log 2>&1 &`) and stop it with `stop.sh`. The Data drive must be
   mounted. A stale `comfyui.pid` can be removed if its process is gone.
 - Models are copied in by hand by the user: `anima_baseV10`, `anima_turboV10`, `qwen_3_06b_base`,

@@ -5,7 +5,12 @@
 # (docs/generation/01-brainstorm.md §4a lists them).
 set -euo pipefail
 
-ROOT="${1:-<dev ComfyUI folder>}"
+# the folder: the first argument, else PROCRAFT_COMFY_ROOT (kept in dev/local.md, not in git)
+ROOT="${1:-${PROCRAFT_COMFY_ROOT:-}}"
+if [ -z "$ROOT" ]; then
+    echo "usage: $0 <folder>   (or set PROCRAFT_COMFY_ROOT)" >&2
+    exit 2
+fi
 PYTHON_VERSION=3.12
 TORCH_INDEX=https://download.pytorch.org/whl/cu130
 

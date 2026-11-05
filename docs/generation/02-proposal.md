@@ -105,7 +105,7 @@ ProCraft later.
 
 ### 5.5 Connection and settings
 
-- **Actions › Prefs › Image generation**: server address (e.g. `http://<LAN address>:8189`), a
+- **Actions › Prefs › Image generation**: server address (e.g. `http://192.168.1.10:8189`), a
   **Test** button, and what the server has: ComfyUI version, required add-ons, Anima models.
 - First use from the Generate popover with nothing set up shows a short card that leads there.
 - On connect, ProCraft checks for the required add-ons and models and names exactly what is missing.

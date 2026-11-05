@@ -176,7 +176,7 @@ section that drives the same crate with buttons and progress bars.
 
 ### 4a. Development setup
 
-What's on this machine now (read only): Linux, a 24 GB GPU, LAN `<LAN address>`. The Krita
+What's on this machine now (read only): Linux, a 24 GB GPU. The Krita
 ComfyUI (0.38.0, at `~/.local/share/krita/ai_diffusion/server`) listens on **127.0.0.1:8188 only**,
 so the tablet can't reach it without restarting it with new arguments, which isn't allowed (D13). Its
 `models/` folder (~303 GB) already holds everything Anima needs: base and turbo checkpoints plus

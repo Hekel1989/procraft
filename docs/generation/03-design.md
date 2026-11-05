@@ -204,7 +204,7 @@ don't carry, and everything generation-related stays in one place.)* Reached fro
 in the popover's title, from "Set up" when no server is set, and from a row **Actions › Prefs ›
 Image generation** that opens the popover on it. Its content:
 
-- **Server** — address field (`http://<LAN address>:8189`; `http://` added if left out; port 8188
+- **Server** — address field (`http://192.168.1.10:8189`; `http://` added if left out; port 8188
   assumed if none), and **Connect**.
 - **Status** — once connected, read-only lines with ✓ / ✕:
   - ComfyUI version
@@ -226,7 +226,7 @@ The settings are app-wide (not per artwork).
 |---|---|---|
 | No server set | Popover body replaced by a card | "Generate needs ComfyUI running on a PC. Set the server in Prefs." [Open Prefs] |
 | Connecting | Title dot amber | — |
-| Can't reach the server | Dot red; Generate disabled | "Can't reach <LAN address>:8189. Is ComfyUI running?" [Retry] |
+| Can't reach the server | Dot red; Generate disabled | "Can't reach 192.168.1.10:8189. Is ComfyUI running?" [Retry] |
 | Missing add-on / model | Dot red or amber; the affected control disabled | "Selections need anima-lllite-inpainting in models/controlnet." |
 | Connection lost during a run | Running thumbnail turns red | "Lost the server during the run." [Again] |
 | Out of GPU memory | Thumbnail red | "The server ran out of GPU memory. Try a smaller selection or count." |
