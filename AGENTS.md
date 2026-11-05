@@ -34,7 +34,7 @@ ProCraft's own design language. It goes upstream later.
   (`io.github.hekel1989.procraftdiffusion`, `.debug` for debug builds) and desktop data folder
   (`~/.local/share/procraft-diffusion`, `%APPDATA%\ProCraft Diffusion`), so it sits beside ProCraft
   with its own artworks. The name lives in `desktop/src/main.rs` (`APP_NAME`, `APP_DIR`),
-  `android/app/src/main/res/values/strings.xml`, `SettingsActivity.kt`'s title and
+  `android/app/src/main/res/values/strings.xml`, `SettingsActivity.kt`'s title, `GalleryScreen.kt`'s title and About, and
   `android/app/build.gradle.kts`'s `applicationId`. The Kotlin namespace, the `.procraft` file
   format and the Linux window class stay ProCraft's. For an upstream PR, leave the rename out.
 - **Following upstream**: merge ProCraft's `main` (remote `upstream`) into `feat/generation` often,
