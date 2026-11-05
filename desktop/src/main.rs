@@ -28,6 +28,8 @@ mod finder;
 mod gallery;
 #[cfg(feature = "generation")]
 mod generation;
+#[cfg(feature = "generation")]
+mod generation_tags;
 mod gesture_controls;
 mod gradient_map;
 mod guide_editor;

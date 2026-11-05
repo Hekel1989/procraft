@@ -74,6 +74,9 @@ Hangs from the button with ProCraft's arrow, like Actions' panel; frosted (`reme
      ("12k"). Tap to complete; the completed tag gets ", " after it.
    - With the field empty and focused, the strip shows **recent prompts** instead (the last 20,
      newest first). Tap to fill the field.
+   - *As built:* the strip shows as many chips as fit (at most four recent prompts on desktop);
+     click or Tab/Enter completes the first. The core reports UTF-16 ranges so Kotlin indices work
+     unchanged, and desktop converts them to its byte offsets.
 4. **Control layers** (only when there are any) — one row each: the layer's thumbnail and name,
    its kind ("Line art" / "Scribble"), a strength slider (0–100 %), and a remove button.
 5. **Selection** (only when there's a selection) — a row "In the selection" with a mode menu:
@@ -562,6 +565,11 @@ A style (`styles/anima.json`, our own file):
   Danbooru and e621 mix fairly; duplicates across the two keep the higher. NSFW entries only when
   the switch is on. Top 12 returned.
 - **Inserted** with spaces instead of underscores, except tags that are emoticons (`^_^`, `>_<`).
+- *As built (M4):* `build.rs` deflates each CSV into `OUT_DIR` and `tags.rs` embeds the four
+  blobs; a `OnceLock` inflates and indexes them on first use, whichever thread asks. The core's
+  `Generation::suggest_tags` returns the top 12 with UTF-16 ranges (`complete_tag` inserts one),
+  and recent prompts are kept there—newest first, at most 20—and saved by the desktop in its
+  `interface` preferences as one escaped `generation_recent` line each.
 
 ## B12. Requirements (shared with the companion)
 

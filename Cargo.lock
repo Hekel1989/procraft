@@ -3184,6 +3184,7 @@ version = "0.0.1"
 dependencies = [
  "image",
  "log",
+ "miniz_oxide 0.8.9",
  "parking_lot",
  "procraft-engine",
  "serde",
