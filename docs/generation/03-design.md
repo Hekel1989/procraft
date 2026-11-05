@@ -267,7 +267,8 @@ As built in M2 (`crates/core/src/generation.rs`): `Generation::new(settings)`, `
 `connect`, `server() -> ServerStatus`, `styles() -> Vec<StyleInfo>`, `generate(session, RunSettings)`,
 `cancel`, `state() -> GenerationState`, `show_result(session, Option<id>)`,
 `apply_result(session, id) -> Option<layer>`, `discard_results(session)`, `leave(session)`, and
-`generation_address(text)`. The sketch below was the plan.
+`generation_address(text)`. M3 adds `selection(session) -> Option<SelectionInfo>`, the context box
+and guessed mode the Form's Selection row uses. The sketch below was the plan.
 
 ```rust
 // app-wide
@@ -300,11 +301,13 @@ impl CanvasSession {
 ```
 
 Records (`uniffi::Record`): `GenerationSettings { address, nsfw }`, `RunSettings { prompt, style,
-strength, seed: Option<u64>, count, selection_mode }`, `GenerationState { runs: Vec<RunInfo>,
-results: Vec<ResultInfo>, shown: Option<u64> }`, `RunInfo { id, progress, preview: Option<Thumbnail>,
-error: Option<String> }`, `ResultInfo { id, run, seed, thumbnail }`, `ServerStatus`, `StyleInfo`,
-`TagSuggestion { tag, kind, count, source, nsfw }`, `ControlLayerInfo`. Enums: `ControlKind { LineArt,
-Scribble }`, `SelectionMode { Fill, Add, Remove, Expand }`.
+strength, seed: Option<u64>, count, resolution, mode: Option<SelectionMode> }` (`mode` defaults to
+none, which guesses), `SelectionInfo { x, y, width, height, mode }`, `GenerationState { runs:
+Vec<RunInfo>, results: Vec<ResultInfo>, shown: Option<u64> }`, `RunInfo { id, progress, preview:
+Option<Thumbnail>, error: Option<String> }`, `ResultInfo { id, run, seed, thumbnail }`,
+`ServerStatus`, `StyleInfo`, `TagSuggestion { tag, kind, count, source, nsfw }`,
+`ControlLayerInfo`. Enums: `ControlKind { LineArt, Scribble }`, `SelectionMode { Fill, Add, Remove,
+Expand }`.
 
 **How the UIs follow it — polling, as ProCraft does for exports.** No callbacks: the UI reads
 `generation_state()` and `server()` (cheap snapshots behind a mutex) — Android in a coroutine every
@@ -403,6 +406,16 @@ Mode details for selections:
 | Remove | telea (from surroundings) | yes | prompt dropped; negative + "object, person, text" |
 | Expand | navier-stokes (continues the edges) | yes | as typed |
 
+*As built (M3):* a selection is **one pass at its target size**, with the largest-picture cap
+applied. A second pass would have to repeat the whole inpaint structure, so Quality on a large box
+is generated at the capped target and scaled from there. The mask grows by 2 % of the context box's
+longer side (at least 8 px) and blurs by half that (`INPAINT_GROW`, `INPAINT_GROW_MIN`,
+`INPAINT_BLUR_SHARE` in `family/anima.rs`); the inpaint control runs at full strength and the last
+colour match at 0.5. Fill and Add pre-fill neutral grey, Remove telea (and appends ", object, person,
+text" to the negative), Expand navier-stokes. The graph composites onto the box's crop through the
+blurred mask; core then multiplies the selection's own mask (feather included) into the result's
+alpha, so the overlay and the applied layer show only the selected part.
+
 **Control images** are prepared in `picture.rs`, not in the graph: the layer flattened onto white,
 turned to white lines on black (what the control models expect), cropped and scaled like the
 picture. Exact settings (grow, blur, control strengths for Anima) are tuned in M3/M4 against the
@@ -445,7 +458,8 @@ passes when the target is much bigger than the model's size).
   as the server reports it (24 GB → 6 MP, 16 GB → 4, 12 GB → 3, 8 GB or less → 2) and changeable.
   A target above it is generated at the cap and scaled up.
 - **Remembered** with the app's other generation settings; **Quality** at first.
-- **Selections**: the same, with the context box as the area.
+- **Selections**: the same, with the context box as the area, but always one pass at the target
+  (see §B6): the inpaint structure is not repeated for a second pass.
 - **The results bar** notes when a result was scaled up by more than 1.5 × ("scaled up from
   1216 × 864"), the note M2 left out.
 - Expected cost on a 24 GB GPU for 2800 × 2000 with the Anima style: Draft ≈ 9 s; Quality roughly
@@ -634,8 +648,6 @@ pill drawn opaque. Desktop builds and is lint-clean with the feature on and off,
 tried by hand yet.
 
 Not done yet, carried forward:
-- **A stroke hiding the preview** (§A4): previews stay until tapped off. Needs a hook where a stroke
-  starts; to add with M3.
 - **The icon in `draw_icons.py`** (§B13) and the "Image generation" row's place in the Prefs tab
   (after Gesture controls).
 

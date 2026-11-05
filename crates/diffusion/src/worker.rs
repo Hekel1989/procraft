@@ -357,7 +357,13 @@ fn run(
     models: &ServerModels,
 ) -> Result<(), Error> {
     let family = request.style.family;
-    let feature = if request.is_new() { Feature::Generate } else { Feature::Refine };
+    let feature = if request.selection.is_some() {
+        Feature::Selections
+    } else if request.is_new() {
+        Feature::Generate
+    } else {
+        Feature::Refine
+    };
     let missing = Readiness::check(family, models).missing(feature).to_vec();
     if !missing.is_empty() {
         return Err(Error::Missing(missing));
@@ -365,7 +371,10 @@ fn run(
     let (width, height) = request.size;
     let vram = on.shared.inner.lock().server.stats.as_ref().and_then(|s| s.gpu.as_ref()).map_or(0, |(_, bytes)| *bytes);
     let largest = request.largest.unwrap_or_else(|| largest_for_vram(vram));
-    let plan = plan_for(width, height, family.native_pixels(), request.resolution, largest, !request.is_new());
+    // Selections are one pass at the target: a second pass would have to repeat the whole inpaint
+    // structure. The refine plan is exactly one pass at the target, never below the model's size.
+    let one_pass = !request.is_new() || request.selection.is_some();
+    let plan = plan_for(width, height, family.native_pixels(), request.resolution, largest, one_pass);
     let weights = pass_weights(&plan, request.style.steps, family);
     let count = request.count.max(1);
     for i in 0..count {

@@ -103,9 +103,9 @@ pub use frame::{configure, screen_profile};
 pub use gallery::{ArtworkStore, GalleryArtwork, GalleryEntry, ZipKind, zip_file_kind};
 #[cfg(feature = "generation")]
 pub use generation::{
-    FeatureStatus, Generation, GenerationError, GenerationFeature, GenerationResolution, GenerationSettings,
-    GenerationState, ResultInfo, RunInfo, RunSettings, ServerConnection, ServerStatus, SizeInfo, StyleInfo,
-    generation_address,
+    FeatureStatus, Generation, GenerationError, GenerationFeature, GenerationMode, GenerationResolution,
+    GenerationSettings, GenerationState, ResultInfo, RunInfo, RunSettings, SelectionInfo, ServerConnection,
+    ServerStatus, SizeInfo, StyleInfo, generation_address,
 };
 pub use gestures::{
     GestureOption, GesturePurpose, GestureSettings, KeptGestures, MAX_DELAY_S, MIN_DELAY_S, Trigger, gesture_options,
@@ -897,6 +897,8 @@ pub(crate) struct Shared {
     projection: Mutex<Option<JoinHandle<()>>>,
     /// Held while the artwork is saved: one save at a time, so two never write the same files.
     pub(crate) saving: Mutex<project::Saved>,
+    /// How many strokes have started: generation's shown preview hides when this changes.
+    pub(crate) preview_strokes: Arc<std::sync::atomic::AtomicU64>,
     /// The artwork's edits as the last save that worked found them, [`project::NOT_SAVED`]
     /// before one (read without waiting on a save).
     pub(crate) edits_saved: std::sync::atomic::AtomicU64,
@@ -1248,6 +1250,7 @@ impl CanvasSession {
                 thread: Mutex::new(None),
                 projection: Mutex::new(None),
                 saving: Mutex::new(project::Saved::default()),
+                preview_strokes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 edits_saved: std::sync::atomic::AtomicU64::new(project::NOT_SAVED),
                 export_progress: std::sync::atomic::AtomicU32::new(0),
                 save_failure: Mutex::new((None, false)),
@@ -1334,6 +1337,14 @@ impl CanvasSession {
         let st = &mut *guard;
         if let Some(kept) = st.pad_strokes.as_mut() {
             kept.push((pointer, samples.clone()));
+        }
+        // a stroke starting hides the generation result shown over the canvas (the bar's results
+        // stay): its counter says so to generation, and the overlay comes off now
+        self.shared.preview_strokes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let (Some(canvas), Some(gpu)) = (st.canvas.as_mut(), st.gpu.as_ref())
+            && canvas.has_overlay()
+        {
+            let _ = canvas.set_overlay(gpu, None);
         }
         // a layer being transformed or adjusted takes no paint, unless the adjustment is painted on
         if st.transform.is_some() || (st.adjusting && !st.pencil) {

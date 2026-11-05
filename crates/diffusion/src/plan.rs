@@ -5,6 +5,10 @@
 
 /// Each side is a multiple of this.
 pub const MULTIPLE: u32 = 16;
+/// How much of a selection's size surrounds it on each side, and the least that does, in canvas
+/// pixels.
+const CONTEXT_SHARE: u32 = 2;
+const CONTEXT_MIN: u32 = 64;
 /// The shortest and longest side generated at the model's own size.
 pub const MIN_SIDE: u32 = 512;
 pub const MAX_SIDE: u32 = 2048;
@@ -95,6 +99,20 @@ pub fn largest_for_vram(bytes: u64) -> f32 {
     }
 }
 
+/// The context box around a selection's `bounds` (`x, y, width, height`) on a canvas of `canvas`
+/// (`width, height`): grown by half the bounds' width and height on each side, at least
+/// [`CONTEXT_MIN`] pixels, and kept on the canvas. Gives `x, y, width, height`.
+pub fn context_box(bounds: [u32; 4], canvas: (u32, u32)) -> [u32; 4] {
+    let [x, y, width, height] = bounds;
+    let grow_x = (width / CONTEXT_SHARE).max(CONTEXT_MIN);
+    let grow_y = (height / CONTEXT_SHARE).max(CONTEXT_MIN);
+    let left = x.saturating_sub(grow_x).min(canvas.0);
+    let top = y.saturating_sub(grow_y).min(canvas.1);
+    let right = x.saturating_add(width).saturating_add(grow_x).min(canvas.0).max(left);
+    let bottom = y.saturating_add(height).saturating_add(grow_y).min(canvas.1).max(top);
+    [left, top, right.saturating_sub(left), bottom.saturating_sub(top)]
+}
+
 /// The model's own plan for an area: about `pixels`, shape kept, sides on the grid and between
 /// [`MIN_SIDE`] and [`MAX_SIDE`].
 pub fn plan(width: u32, height: u32, pixels: u32) -> Plan {
@@ -180,6 +198,22 @@ mod tests {
 
     fn at(width: u32, height: u32, resolution: Resolution, largest: f32) -> Plan {
         plan_for(width, height, MP, resolution, largest, false)
+    }
+
+    #[test]
+    fn a_context_box_grows_a_selection_in_the_middle() {
+        assert_eq!(context_box([400, 300, 200, 100], (1000, 800)), [300, 236, 400, 228]);
+    }
+
+    #[test]
+    fn a_context_box_stops_at_the_canvas_edge() {
+        assert_eq!(context_box([0, 700, 100, 100], (1000, 800)), [0, 636, 164, 164]);
+    }
+
+    #[test]
+    fn a_tiny_selection_gets_at_least_64_pixels_of_context() {
+        assert_eq!(context_box([500, 500, 4, 4], (1000, 1000)), [436, 436, 132, 132]);
+        assert_eq!(context_box([0, 0, 1, 1], (100, 100)), [0, 0, 65, 65]);
     }
 
     #[test]

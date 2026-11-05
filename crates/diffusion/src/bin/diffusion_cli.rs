@@ -2,9 +2,9 @@
 //!
 //! ```text
 //! diffusion-cli [--server ADDRESS] check
-//! diffusion-cli [--server ADDRESS] generate PROMPT [--style ID] [--size WxH] [--count N]
+//! diffusion-cli [--server ADDRESS] generate [PROMPT] [--style ID] [--size WxH] [--count N]
 //!     [--seed N] [--strength S --input FILE] [--resolution draft|normal|quality]
-//!     [--largest MP] [--nsfw] [-o FILE]
+//!     [--mask FILE --mode fill|add|remove|expand] [--largest MP] [--nsfw] [-o FILE]
 //! ```
 //!
 //! The server is `--server`, else `PROCRAFT_COMFY_URL`, else `127.0.0.1:8189`.
@@ -14,14 +14,14 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use procraft_diffusion::{
-    Address, Connection, Family, Feature, Picture, Plan, Request, Resolution, ServerState, Worker, largest_for_vram,
-    plan_for,
+    Address, Connection, Family, Feature, Picture, Plan, Request, Resolution, Selection, SelectionMode, ServerState,
+    Worker, largest_for_vram, plan_for,
 };
 
 const USAGE: &str = "usage: diffusion-cli [--server ADDRESS] check
-       diffusion-cli [--server ADDRESS] generate PROMPT [--style ID] [--size WxH] [--count N]
+       diffusion-cli [--server ADDRESS] generate [PROMPT] [--style ID] [--size WxH] [--count N]
            [--seed N] [--strength S --input FILE] [--resolution draft|normal|quality]
-           [--largest MP] [--nsfw] [-o FILE]";
+           [--mask FILE --mode fill|add|remove|expand] [--largest MP] [--nsfw] [-o FILE]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -49,6 +49,16 @@ fn resolution(args: &[String]) -> Result<Resolution, String> {
         "normal" => Ok(Resolution::Normal),
         "quality" => Ok(Resolution::Quality),
         other => Err(format!("--resolution: draft, normal or quality, not {other}")),
+    }
+}
+
+fn selection_mode(args: &[String]) -> Result<SelectionMode, String> {
+    match flag(args, "--mode").unwrap_or("fill").to_ascii_lowercase().as_str() {
+        "fill" => Ok(SelectionMode::Fill),
+        "add" => Ok(SelectionMode::Add),
+        "remove" => Ok(SelectionMode::Remove),
+        "expand" => Ok(SelectionMode::Expand),
+        other => Err(format!("--mode: fill, add, remove or expand, not {other}")),
     }
 }
 
@@ -80,6 +90,8 @@ fn cli(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         ["generate", prompt] => generate(&worker, &server, prompt, args),
+        // a selection can have no prompt at all (Fill and Remove don't need one)
+        ["generate"] if flag(args, "--mask").is_some() => generate(&worker, &server, "", args),
         _ => Err(USAGE.to_owned()),
     }
 }
@@ -145,6 +157,25 @@ fn generate(worker: &Worker, server: &ServerState, prompt: &str, args: &[String]
     };
     let random = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64 % 1_000_000_000).unwrap_or(0);
     let resolution = resolution(args)?;
+    let mask = flag(args, "--mask")
+        .map(|file| -> Result<Vec<u8>, String> {
+            let bytes = std::fs::read(file).map_err(|e| format!("{file}: {e}"))?;
+            let image = image::load_from_memory(&bytes).map_err(|e| format!("{file}: {e}"))?.into_luma8();
+            if (image.width(), image.height()) == size {
+                Ok(image.into_raw())
+            } else {
+                let scaled = image::imageops::resize(&image, size.0, size.1, image::imageops::FilterType::Triangle);
+                Ok(scaled.into_raw())
+            }
+        })
+        .transpose()?;
+    if mask.is_some() && picture.is_none() {
+        return Err("--mask: needs --input, the picture the mask selects in".to_owned());
+    }
+    let selection = match mask {
+        Some(mask) => Some(Selection { mask, mode: selection_mode(args)? }),
+        None => None,
+    };
     let largest: Option<f32> =
         flag(args, "--largest").map(|v| v.parse().map_err(|_| format!("--largest: not a number: {v}"))).transpose()?;
     let request = Request {
@@ -154,6 +185,7 @@ fn generate(worker: &Worker, server: &ServerState, prompt: &str, args: &[String]
         seed: number(args, "--seed", random)?,
         count: number(args, "--count", 1)?,
         picture: picture.map(|p| p.resized(size.0, size.1)).transpose().map_err(|e| e.to_string())?,
+        selection,
         size,
         resolution,
         largest,
@@ -164,8 +196,8 @@ fn generate(worker: &Worker, server: &ServerState, prompt: &str, args: &[String]
     }
     let vram = server.stats.as_ref().and_then(|s| s.gpu.as_ref()).map_or(0, |(_, bytes)| *bytes);
     let largest = request.largest.unwrap_or_else(|| largest_for_vram(vram));
-    let plan =
-        plan_for(size.0, size.1, request.style.family.native_pixels(), request.resolution, largest, !request.is_new());
+    let one_pass = !request.is_new() || request.selection.is_some();
+    let plan = plan_for(size.0, size.1, request.style.family.native_pixels(), request.resolution, largest, one_pass);
     print_plan(&plan);
     let out = PathBuf::from(flag(args, "-o").unwrap_or("generated.png"));
     let started = Instant::now();

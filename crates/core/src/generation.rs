@@ -13,17 +13,20 @@
 //! the results back on the way in.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
+use procraft_diffusion::plan::context_box;
 use procraft_diffusion::{
-    Address, Connection, Feature, Picture, Request, Resolution as PlanResolution, RunId, Worker, largest_for_vram,
-    plan_for,
+    Address, Connection, Feature, Picture, Request, Resolution as PlanResolution, RunId, Selection as RequestSelection,
+    SelectionMode as RequestMode, Worker, largest_for_vram, plan_for,
 };
 use procraft_engine::cms::{Lut, builtin};
 use procraft_engine::document::{Document, LayerId};
 use procraft_engine::geom::IRect;
 use procraft_engine::profile::Profile;
+use procraft_engine::selection::Mask;
 
 use crate::{CanvasSession, ThumbnailImage};
 
@@ -64,6 +67,41 @@ impl From<GenerationResolution> for PlanResolution {
             GenerationResolution::Draft => PlanResolution::Draft,
             GenerationResolution::Normal => PlanResolution::Normal,
             GenerationResolution::Quality => PlanResolution::Quality,
+        }
+    }
+}
+
+/// How a selection is generated into.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum GenerationMode {
+    /// Paint the area to fit its surroundings, guided by the prompt.
+    Fill,
+    /// Start from a neutral fill, so the prompt shapes a new thing in the area.
+    Add,
+    /// Take what is there away.
+    Remove,
+    /// Fill transparent edges in from the picture's borders.
+    Expand,
+}
+
+impl From<GenerationMode> for RequestMode {
+    fn from(mode: GenerationMode) -> RequestMode {
+        match mode {
+            GenerationMode::Fill => RequestMode::Fill,
+            GenerationMode::Add => RequestMode::Add,
+            GenerationMode::Remove => RequestMode::Remove,
+            GenerationMode::Expand => RequestMode::Expand,
+        }
+    }
+}
+
+impl From<RequestMode> for GenerationMode {
+    fn from(mode: RequestMode) -> GenerationMode {
+        match mode {
+            RequestMode::Fill => GenerationMode::Fill,
+            RequestMode::Add => GenerationMode::Add,
+            RequestMode::Remove => GenerationMode::Remove,
+            RequestMode::Expand => GenerationMode::Expand,
         }
     }
 }
@@ -156,6 +194,9 @@ pub struct RunSettings {
     pub count: u32,
     #[uniffi(default = None)]
     pub resolution: Option<GenerationResolution>,
+    /// The selection's mode; none guesses Fill or Expand from what is selected.
+    #[uniffi(default = None)]
+    pub mode: Option<GenerationMode>,
 }
 
 /// The run going now.
@@ -205,6 +246,16 @@ pub struct SizeInfo {
     pub from_height: u32,
 }
 
+/// The selection a run would use: its context box on the canvas and the mode guessed for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct SelectionInfo {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub mode: GenerationMode,
+}
+
 /// How generation stands for the open artwork.
 #[derive(Clone, Debug, Default, PartialEq, uniffi::Record)]
 pub struct GenerationState {
@@ -245,12 +296,21 @@ struct Kept {
 struct Running {
     id: RunId,
     area: IRect,
+    /// The selection's mask at the area (one byte per pixel), multiplied into results' alpha.
+    mask: Option<Vec<u8>>,
     /// The name its pictures' layers get.
     name: String,
     /// Its pictures taken into [`Artwork::results`] so far, and previews seen.
     taken: usize,
     previews: u32,
     preview: Option<ThumbnailImage>,
+}
+
+/// A guessed selection mode, kept until the artwork changes.
+struct Guess {
+    revision: u64,
+    area: [u32; 4],
+    mode: GenerationMode,
 }
 
 /// The open artwork's part: which session it is, its run, its results.
@@ -265,6 +325,10 @@ struct Artwork {
     error: Option<String>,
     /// sRGB to the canvas's colours, for a canvas in another profile.
     from_srgb: Option<Lut>,
+    /// How many strokes the session had when the result was shown, and the counter itself.
+    shown_at: u64,
+    strokes: Option<Arc<AtomicU64>>,
+    selection_guess: Option<Guess>,
 }
 
 /// Image generation for the app: create one, give it the settings, and use it with the open
@@ -345,20 +409,51 @@ impl Generation {
         }
     }
 
-    /// What `resolution` makes of `session`'s area: its target, passes and generated size.
+    /// The selection a run would use, if there is one: its context box and guessed mode.
+    pub fn selection(&self, session: &CanvasSession) -> Option<SelectionInfo> {
+        let selected = current_selection(session)?;
+        let [x, y, width, height] = context_box(selected.bounds, selected.canvas);
+        let mut artwork = self.artwork_of(session);
+        let area = [x, y, width, height];
+        if let Some(guess) =
+            artwork.selection_guess.as_ref().filter(|g| g.revision == selected.revision && g.area == area)
+        {
+            return Some(SelectionInfo { x, y, width, height, mode: guess.mode });
+        }
+        let mode = session
+            .picture_for_generation(true)
+            .ok()
+            .and_then(|picture| picture.picture)
+            .map_or(GenerationMode::Fill, |picture| guess_mode(&selected.mask, &picture, selected.canvas));
+        let revision = session.shared.lock().revision;
+        artwork.selection_guess = Some(Guess { revision, area, mode });
+        Some(SelectionInfo { x, y, width, height, mode })
+    }
+
+    /// What `resolution` makes of `session`'s area (the selection's context box when there is a
+    /// selection): its target, passes and generated size.
     pub fn size_for(&self, session: &CanvasSession, resolution: GenerationResolution) -> SizeInfo {
         let server = self.worker.server();
-        let (width, height) = {
-            let state = session.shared.lock_finished();
-            (state.doc.width(), state.doc.height())
+        let selection = selection_bounds(session);
+        let (width, height) = match selection {
+            Some((bounds, canvas)) => {
+                let [_, _, width, height] = context_box(bounds, canvas);
+                (width, height)
+            }
+            None => {
+                let state = session.shared.lock_finished();
+                (state.doc.width(), state.doc.height())
+            }
         };
+        // A selection is one pass at the target (see the worker): its second pass would have to
+        // repeat the whole inpaint structure.
         let plan = plan_for(
             width,
             height,
             procraft_diffusion::Family::Anima.native_pixels(),
             resolution.into(),
             self.largest_megapixels(&server),
-            false,
+            selection.is_some(),
         );
         SizeInfo {
             width: plan.target.width,
@@ -381,8 +476,9 @@ impl Generation {
             .collect()
     }
 
-    /// Starts a run on `session`'s artwork: from the picture as it is when strength is below 1.
-    /// Its pictures come into [`state`](Self::state)'s results as they're made.
+    /// Starts a run on `session`'s artwork: from the picture as it is when strength is below 1, or
+    /// inside the selection when there is one. Its pictures come into
+    /// [`state`](Self::state)'s results as they're made.
     pub fn generate(&self, session: &CanvasSession, run: RunSettings) -> Result<u64, GenerationError> {
         let server = self.worker.server();
         if server.connection != Connection::Connected {
@@ -395,8 +491,15 @@ impl Generation {
             .or_else(|| styles.first())
             .cloned()
             .ok_or_else(|| GenerationError::NotReady { reason: "the server has no Anima model".to_owned() })?;
+        let selected = current_selection(session);
         let refine = run.strength < 1.0;
-        let feature = if refine { Feature::Refine } else { Feature::Generate };
+        let feature = if selected.is_some() {
+            Feature::Selections
+        } else if refine {
+            Feature::Refine
+        } else {
+            Feature::Generate
+        };
         if !server.ready(style.family, feature) {
             return Err(GenerationError::NotReady { reason: format!("the server isn't ready to {}", feature.label()) });
         }
@@ -404,24 +507,52 @@ impl Generation {
         if artwork.running.is_some() {
             return Err(GenerationError::NotReady { reason: "a run is going".to_owned() });
         }
-        let picture = session.picture_for_generation(refine)?;
+        let picture = session.picture_for_generation(refine || selected.is_some())?;
         artwork.from_srgb = picture.from_srgb;
-        let area = IRect::from_size(picture.width, picture.height);
+        let mut area = IRect::from_size(picture.width, picture.height);
+        let mut size = (picture.width, picture.height);
+        let mut request_picture = picture.picture;
+        let mut request_selection = None;
+        let mut mask = None;
+        if let Some(selected) = selected {
+            let [x, y, width, height] = context_box(selected.bounds, selected.canvas);
+            let Some(full) = request_picture.as_ref() else {
+                return Err(GenerationError::Canvas { reason: "the canvas isn't drawn yet".to_owned() });
+            };
+            let mode = run.mode.unwrap_or_else(|| guess_mode(&selected.mask, full, selected.canvas));
+            if mode == GenerationMode::Add && run.prompt.trim().is_empty() {
+                return Err(GenerationError::NotReady { reason: "Add needs a prompt".to_owned() });
+            }
+            area = IRect::new(
+                i32::try_from(x).unwrap_or(i32::MAX),
+                i32::try_from(y).unwrap_or(i32::MAX),
+                i32::try_from(x.saturating_add(width)).unwrap_or(i32::MAX),
+                i32::try_from(y.saturating_add(height)).unwrap_or(i32::MAX),
+            );
+            size = (width, height);
+            let cropped =
+                full.cropped(x, y, width, height).map_err(|e| GenerationError::Canvas { reason: e.to_string() })?;
+            request_picture = Some(cropped);
+            let part = crate::layer_ops::mask_part(&selected.mask, area);
+            request_selection = Some(RequestSelection { mask: part.clone(), mode: mode.into() });
+            mask = Some(part);
+        }
         let request = Request {
             prompt: run.prompt,
             style,
             strength: run.strength.clamp(0.0, 1.0),
             seed: run.seed.unwrap_or_else(random_seed),
             count: run.count.clamp(1, MOST_PICTURES),
-            picture: picture.picture,
-            size: (picture.width, picture.height),
+            picture: request_picture,
+            selection: request_selection,
+            size,
             resolution: run.resolution.unwrap_or_default().into(),
             largest: Some(self.largest_megapixels(&server)),
             nsfw: self.settings.lock().nsfw,
         };
         let name = layer_name(&request.prompt);
         let id = self.worker.submit(request);
-        artwork.running = Some(Running { id, area, name, taken: 0, previews: 0, preview: None });
+        artwork.running = Some(Running { id, area, mask, name, taken: 0, previews: 0, preview: None });
         artwork.error = None;
         Ok(id)
     }
@@ -469,6 +600,13 @@ impl Generation {
         if running.is_none() {
             artwork.running = None;
         }
+        // a stroke starting took the shown preview off the canvas (the bar's results stay)
+        if let Some(strokes) = &artwork.strokes
+            && artwork.shown.is_some()
+            && artwork.shown_at != strokes.load(Ordering::Relaxed)
+        {
+            artwork.shown = None;
+        }
         GenerationState {
             running,
             results: artwork
@@ -493,6 +631,7 @@ impl Generation {
         let kept = result.and_then(|id| artwork.results.iter().find(|k| k.id == id));
         session.set_overlay(kept.map(|k| (k.area, k.pixels.as_slice())));
         artwork.shown = kept.map(|k| k.id);
+        artwork.shown_at = artwork.strokes.as_ref().map_or(0, |strokes| strokes.load(Ordering::Relaxed));
     }
 
     /// Adds result `result` to `session`'s artwork as a new layer at the top of the stack (where
@@ -542,6 +681,7 @@ impl Generation {
         if artwork.session != key {
             self.forget(&mut artwork);
             artwork.session = key;
+            artwork.strokes = Some(Arc::clone(&session.shared.preview_strokes));
         }
         artwork
     }
@@ -557,6 +697,52 @@ impl Generation {
 
 fn session_key(session: &CanvasSession) -> usize {
     Arc::as_ptr(&session.shared) as usize
+}
+
+/// The selection on `session`, if anything is selected.
+struct Selected {
+    mask: Mask,
+    bounds: [u32; 4],
+    canvas: (u32, u32),
+    revision: u64,
+}
+
+fn current_selection(session: &CanvasSession) -> Option<Selected> {
+    let state = session.shared.lock();
+    let mask = state.selection.as_ref()?;
+    let bounds = mask.bounds()?;
+    Some(Selected {
+        mask: mask.clone(),
+        bounds,
+        canvas: (state.doc.width(), state.doc.height()),
+        revision: state.revision,
+    })
+}
+
+/// The selection's bounds and the canvas size, without copying the mask.
+fn selection_bounds(session: &CanvasSession) -> Option<([u32; 4], (u32, u32))> {
+    let state = session.shared.lock();
+    let bounds = state.selection.as_ref()?.bounds()?;
+    Some((bounds, (state.doc.width(), state.doc.height())))
+}
+
+/// Whether a selection is mostly transparent pixels at the canvas edge (then Expand), else Fill.
+fn guess_mode(mask: &Mask, picture: &Picture, canvas: (u32, u32)) -> GenerationMode {
+    let Some([x, y, width, height]) = mask.bounds() else { return GenerationMode::Fill };
+    let pixels = picture.rgba.as_chunks::<4>().0;
+    let mut selected = 0u64;
+    let mut clear = 0u64;
+    for (i, &value) in mask.data.iter().enumerate() {
+        if value == 0 {
+            continue;
+        }
+        selected += 1;
+        if pixels.get(i).is_some_and(|px| px[3] < 8) {
+            clear += 1;
+        }
+    }
+    let edge = x == 0 || y == 0 || x.saturating_add(width) >= canvas.0 || y.saturating_add(height) >= canvas.1;
+    if edge && clear * 2 > selected { GenerationMode::Expand } else { GenerationMode::Fill }
 }
 
 fn random_seed() -> u64 {
@@ -584,6 +770,12 @@ fn keep(id: u64, result: &procraft_diffusion::RunResult, run: &Running, from_srg
     let mut pixels = result.picture.rgba.clone();
     if let Some(lut) = from_srgb {
         lut.apply_rgba(&mut pixels, false);
+    }
+    if let Some(mask) = &run.mask {
+        for (px, &value) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(mask) {
+            let alpha = u16::from(px[3]);
+            px[3] = ((alpha * u16::from(value) + 127) / 255) as u8;
+        }
     }
     premultiply(&mut pixels);
     let scaled_from = if area.width() as f64 / f64::from(from.0.max(1)) > SCALED_UP
@@ -797,7 +989,7 @@ mod tests {
         assert!(!quality.capped);
         let normal = generation.size_for(&session, GenerationResolution::Normal);
         assert_eq!((normal.width, normal.height), (1400, 1000));
-        assert_eq!(normal.passes, 2);
+        assert_eq!(normal.passes, 1, "near the model's size: one pass");
         assert_eq!((normal.from_width, normal.from_height), (1408, 1008));
         assert!(normal.scaled_up);
         let draft = generation.size_for(&session, GenerationResolution::Draft);
@@ -830,5 +1022,121 @@ mod tests {
         for (a, b) in px.iter().zip(&before).take(8) {
             assert!(a.abs_diff(*b) <= 1, "{px:?} {before:?}");
         }
+    }
+
+    #[test]
+    fn a_selection_info_is_its_context_box_and_guessed_mode() {
+        let Some(s) = session(200) else { return };
+        {
+            let mut state = s.shared.lock();
+            let mut mask = Mask::empty(200, 200);
+            for row in 90..110 {
+                for column in 90..110 {
+                    mask.data[row * 200 + column] = 255;
+                }
+            }
+            state.selection = Some(mask);
+            state.revision += 1;
+        }
+        let settings = GenerationSettings { address: String::new(), nsfw: false, largest_megapixels: Some(2.0) };
+        let generation = Generation::new(settings);
+        let info = generation.selection(&s).unwrap();
+        assert_eq!((info.x, info.y, info.width, info.height), (26, 26, 148, 148));
+        assert_eq!(info.mode, GenerationMode::Fill);
+        let size = generation.size_for(&s, GenerationResolution::Quality);
+        assert_eq!((size.width, size.height), (148, 148), "the context box is the area");
+    }
+
+    #[test]
+    fn a_selection_guesses_expand_only_over_transparency_at_an_edge() {
+        let mut mask = Mask::empty(16, 16);
+        for y in 0..16 {
+            for x in 0..8 {
+                mask.data[y * 16 + x] = 255;
+            }
+        }
+        let clear = Picture::new(16, 16, vec![0; 16 * 16 * 4]).unwrap();
+        assert_eq!(guess_mode(&mask, &clear, (16, 16)), GenerationMode::Expand);
+        let opaque = Picture::new(16, 16, vec![255; 16 * 16 * 4]).unwrap();
+        assert_eq!(guess_mode(&mask, &opaque, (16, 16)), GenerationMode::Fill);
+
+        let mut inside = Mask::empty(16, 16);
+        for y in 4..12 {
+            for x in 4..12 {
+                inside.data[y * 16 + x] = 255;
+            }
+        }
+        assert_eq!(guess_mode(&inside, &clear, (16, 16)), GenerationMode::Fill);
+    }
+
+    #[test]
+    fn a_selection_result_keeps_the_context_box_and_is_clear_outside_the_mask() {
+        let [x, y, width, height] = context_box([90, 90, 20, 20], (200, 200));
+        assert_eq!([x, y, width, height], [26, 26, 148, 148]);
+        let mut mask = Mask::empty(width, height);
+        for row in 0..height {
+            for column in 0..width / 2 {
+                mask.data[row as usize * width as usize + column as usize] = 255;
+            }
+        }
+        let run = Running {
+            id: 0,
+            area: IRect::new(x as i32, y as i32, (x + width) as i32, (y + height) as i32),
+            mask: Some(mask.data.clone()),
+            name: "Generated · test".to_owned(),
+            taken: 0,
+            previews: 0,
+            preview: None,
+        };
+        let picture = Picture::new(width, height, [255u8, 0, 0, 255].repeat((width * height) as usize)).unwrap();
+        let result = procraft_diffusion::RunResult { seed: 1, picture, generated: (width, height) };
+        let kept = keep(1, &result, &run, None).unwrap();
+        assert_eq!((kept.area.x0, kept.area.y0, kept.area.x1, kept.area.y1), (26, 26, 174, 174));
+        assert_eq!(kept.pixels.first_chunk::<4>(), Some(&[255, 0, 0, 255]));
+        let outside = (width as usize / 2) * 4;
+        assert_eq!(kept.pixels.get(outside..outside + 4), Some([0, 0, 0, 0].as_slice()));
+
+        let Some(s) = session(200) else { return };
+        let id = s.add_generated(kept.area, &kept.pixels, &kept.name).unwrap();
+        let px = composite(&s);
+        assert_eq!(at(&px, 200, 30, 30), [255, 0, 0, 255], "inside the mask");
+        assert_eq!(at(&px, 200, 170, 170), [255, 255, 255, 255], "outside it stays clear");
+        assert_eq!(s.shared.lock().doc.layer(LayerId(id)).unwrap().name, "Generated · test");
+    }
+
+    #[test]
+    fn starting_a_stroke_hides_the_shown_result_but_keeps_the_bar_s() {
+        let Some(s) = session(64) else { return };
+        let settings = GenerationSettings { address: String::new(), nsfw: false, largest_megapixels: Some(2.0) };
+        let generation = Generation::new(settings);
+        let kept = Kept {
+            id: 1,
+            seed: 1,
+            name: "Generated · test".to_owned(),
+            area: IRect::new(8, 8, 24, 24),
+            pixels: [255u8, 0, 0, 255].repeat(16 * 16),
+            thumbnail: ThumbnailImage { width: 1, height: 1, rgba: vec![255, 0, 0, 255] },
+            scaled_from: (0, 0),
+        };
+        generation.artwork_of(&s).results.push(kept);
+        generation.show_result(&s, Some(1));
+        assert_eq!(generation.state().shown, Some(1));
+        assert!(s.shared.lock().canvas.as_ref().unwrap().has_overlay());
+        s.stroke_begin(
+            crate::PointerKind::Finger,
+            vec![crate::PenSample {
+                x: 10.0,
+                y: 10.0,
+                pressure: 1.0,
+                tilt: 0.0,
+                orientation: 0.0,
+                time_ms: 0.0,
+                roll: 0.0,
+            }],
+        );
+        assert!(!s.shared.lock().canvas.as_ref().unwrap().has_overlay());
+        let state = generation.state();
+        assert_eq!(state.shown, None);
+        assert_eq!(state.results.len(), 1, "the bar keeps the result");
     }
 }

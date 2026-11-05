@@ -167,9 +167,10 @@ impl Selection {
     }
 
     /// Draws what shows while selecting and the toolbar with its popover; does what was asked.
-    pub fn show(&mut self, ctx: &egui::Context, look: &mut Look, session: &CanvasSession, bar_top: f32) {
+    /// Returns whether Generate was tapped (to open the Generate popover).
+    pub fn show(&mut self, ctx: &egui::Context, look: &mut Look, session: &CanvasSession, bar_top: f32) -> bool {
         if !self.on {
-            return;
+            return false;
         }
         self.overlay(ctx, session, bar_top);
         let drawing = !session.freehand_path().is_empty();
@@ -186,7 +187,7 @@ impl Selection {
                 (icon, label, self.kind == k)
             })
             .collect();
-        let buttons = [
+        let mut buttons = vec![
             Button::new(&icons::SELECT_ADD, "Add", 44.0).active(!joins || !self.removes),
             Button::new(&icons::SELECT_REMOVE, "Remove", 44.0).active(joins && self.removes).enabled(joins),
             Button::new(&icons::INVERT, "Invert", 44.0).enabled(has),
@@ -196,10 +197,19 @@ impl Selection {
                 .active(self.popup == Popup::Saved)
                 .enabled(has || drawing),
             Button::new(&icons::COLOR_FILL, "Color Fill", 37.0).active(self.color_fill),
-            Button::new(&icons::CLEAR_SELECTION, "Clear", 44.0).enabled(has || drawing),
         ];
+        #[cfg(feature = "generation")]
+        let generate = {
+            let index = buttons.len();
+            buttons.push(Button::new(&crate::generation::GENERATE, "Generate", 44.0).enabled(has));
+            Some(index)
+        };
+        #[cfg(not(feature = "generation"))]
+        let generate = None;
+        buttons.push(Button::new(&icons::CLEAR_SELECTION, "Clear", 44.0).enabled(has || drawing));
         let tapped =
             floating_toolbar(ctx, look, "selection toolbar", (BUTTON_ROOMY, BUTTON_NARROW), &segments, &buttons, 41.0);
+        let mut generate_tapped = false;
         match tapped {
             Some(Tapped::Background) => self.set_popup(session, Popup::None),
             Some(Tapped::Segment(k)) => {
@@ -237,6 +247,7 @@ impl Selection {
                     session.fill_selection();
                 }
             }
+            Some(Tapped::Button(index)) if generate == Some(index) => generate_tapped = true,
             Some(Tapped::Button(_)) => {
                 session.set_touch_selecting(None);
                 self.touches(session);
@@ -251,6 +262,7 @@ impl Selection {
             self.set_popup(session, Popup::None);
         }
         self.popover(ctx, look, session);
+        generate_tapped
     }
 
     fn open_popup(&mut self, ctx: &egui::Context, session: &CanvasSession, p: Popup) {
