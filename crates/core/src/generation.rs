@@ -5,10 +5,12 @@
 //! One [`Generation`] serves the app: its server, the styles there, and the open artwork's run and
 //! results. Its methods take the artwork's [`CanvasSession`]; when another artwork is used, the
 //! last one's run is cancelled and its results are kept with its folder (in `generation/` inside
-//! it, written on a thread of its own), so opening it again brings them back. Results are shown
-//! over the canvas (the renderer's overlay, never part of the artwork) until one is applied, which
-//! adds it as a layer at the top of the stack, the way it was shown, as one undo step. The app
-//! polls [`Generation::state`] and [`Generation::server`], as it polls an export's progress.
+//! it, written on a thread of its own), so opening it again brings them back. Once a result is in
+//! its folder, only its thumbnail and metadata stay in memory: its full pixels live in its PNG,
+//! and at most the one shown (or one just made, until it's written) keeps them here. Results are
+//! shown over the canvas (the renderer's overlay, never part of the artwork) until one is applied,
+//! which adds it as a layer at the top of the stack, the way it was shown, as one undo step. The
+//! app polls [`Generation::state`] and [`Generation::server`], as it polls an export's progress.
 //!
 //! The model sees sRGB: the picture is converted from the canvas's profile on the way out and
 //! the results back on the way in.
@@ -293,8 +295,10 @@ pub enum GenerationError {
 }
 
 /// A result kept: where it goes on the canvas and its pixels there (premultiplied RGBA8, the
-/// canvas's colours, the area's size). The pixels are shared with a save waiting to write them,
-/// so handing them to the background saver doesn't copy a whole picture.
+/// canvas's colours, the area's size). The pixels are in memory only for the result shown, one
+/// just made until the saver has written it, or (with no folder) all of a session's results;
+/// otherwise they're read from the result's PNG when needed. When in memory they're shared with
+/// a save waiting to write them, so handing them to the background saver doesn't copy a picture.
 #[derive(Clone)]
 struct Kept {
     id: u64,
@@ -302,10 +306,13 @@ struct Kept {
     /// The layer's name if it's applied.
     name: String,
     area: IRect,
-    pixels: Arc<Vec<u8>>,
+    /// The pixels, when they're in memory.
+    pixels: Option<Arc<Vec<u8>>>,
     thumbnail: ThumbnailImage,
     /// The size it was made at when scaled up to the area; 0 × 0 when it wasn't.
     scaled_from: (u32, u32),
+    /// Its PNG is in the artwork's folder.
+    saved: bool,
 }
 
 /// What the results' index keeps of one result, oldest first.
@@ -319,6 +326,9 @@ struct SavedResult {
     area: [i32; 4],
     #[serde(default)]
     scaled_from: [u32; 2],
+    /// The thumbnail PNG's size.
+    #[serde(default)]
+    thumbnail: [u32; 2],
 }
 
 /// `<folder>/generation/index.json`: the format version and every result kept, in order.
@@ -330,14 +340,22 @@ struct ResultsIndex {
     results: Vec<SavedResult>,
 }
 
-/// A result on its way to the background saver: the index's fields and the pixels themselves.
+/// A result on its way to the background saver: the index's fields, its thumbnail, and its pixels
+/// when they're still in memory (a result already written only needs its index entry).
 struct WriteResult {
     id: u64,
     seed: u64,
     name: String,
     area: [i32; 4],
     scaled_from: [u32; 2],
-    pixels: Arc<Vec<u8>>,
+    pixels: Option<Arc<Vec<u8>>>,
+    thumbnail: ThumbnailImage,
+}
+
+/// A save finished on the background thread: where, and which results' PNGs are now written.
+struct SavedResults {
+    folder: PathBuf,
+    ids: Vec<u64>,
 }
 
 /// What the background saver does, one at a time and in the order asked.
@@ -424,7 +442,10 @@ pub struct Generation {
     load_sender: mpsc::Sender<LoadedResults>,
     /// Numbers the loads, so one for another artwork or folder is ignored.
     loads: AtomicU64,
+    /// Joins the writer before the receiver below goes, so its last report isn't lost.
     saver: Saver,
+    /// What finished saves report to; the pixels they wrote can then leave memory.
+    saved: Mutex<mpsc::Receiver<SavedResults>>,
 }
 
 /// `text` as a server address (`host:port`, port 8188 if none given); none if it isn't one.
@@ -438,6 +459,7 @@ impl Generation {
     #[uniffi::constructor]
     pub fn new(settings: GenerationSettings) -> Arc<Generation> {
         let (load_sender, loaded) = mpsc::channel();
+        let (saved_sender, saved) = mpsc::channel();
         let generation = Generation {
             worker: Worker::new(),
             settings: Mutex::new(settings.clone()),
@@ -445,7 +467,8 @@ impl Generation {
             loaded: Mutex::new(loaded),
             load_sender,
             loads: AtomicU64::new(0),
-            saver: Saver::new(),
+            saver: Saver::new(saved_sender),
+            saved: Mutex::new(saved),
         };
         generation.worker.set_address(Address::parse(&settings.address));
         Arc::new(generation)
@@ -692,6 +715,7 @@ impl Generation {
         let mut guard = self.artwork.lock();
         let artwork = &mut *guard;
         self.take_loaded(artwork);
+        self.take_saved(artwork);
         self.ensure_loading(artwork);
         let mut running = None;
         let made = self.take_made(artwork);
@@ -725,6 +749,7 @@ impl Generation {
             && artwork.shown_at != strokes.load(Ordering::Relaxed)
         {
             artwork.shown = None;
+            release_hidden_pixels(artwork);
         }
         let trimmed = trim_results(artwork);
         if trimmed && artwork.shown.is_some_and(|id| !artwork.results.iter().any(|k| k.id == id)) {
@@ -732,6 +757,9 @@ impl Generation {
                 CanvasSession { shared }.set_overlay(None);
             }
             artwork.shown = None;
+        }
+        if trimmed {
+            release_hidden_pixels(artwork);
         }
         if made || trimmed {
             self.save_kept(artwork);
@@ -754,23 +782,46 @@ impl Generation {
         }
     }
 
-    /// Shows result `result` over `session`'s canvas, or none.
+    /// Shows result `result` over `session`'s canvas, or none. A result whose pixels are only in
+    /// its PNG is read here (a tap, not a loop); the one shown is the only one that keeps them.
     pub fn show_result(&self, session: &CanvasSession, result: Option<u64>) {
         let mut artwork = self.artwork_of(session);
-        let kept = result.and_then(|id| artwork.results.iter().find(|k| k.id == id));
-        session.set_overlay(kept.map(|k| (k.area, k.pixels.as_slice())));
-        artwork.shown = kept.map(|k| k.id);
+        // let the one shown go before the next is read, so only one is ever held
+        if result != artwork.shown {
+            artwork.shown = None;
+            release_hidden_pixels(&mut artwork);
+        }
+        let shown = result.and_then(|id| self.pixels_for(&mut artwork, id).map(|pixels| (id, pixels)));
+        if let Some((id, pixels)) = shown
+            && let Some(area) = artwork.results.iter().find(|k| k.id == id).map(|k| k.area)
+        {
+            session.set_overlay(Some((area, pixels.as_slice())));
+            artwork.shown = Some(id);
+        } else {
+            session.set_overlay(None);
+            artwork.shown = None;
+        }
         artwork.shown_at = artwork.strokes.as_ref().map_or(0, |strokes| strokes.load(Ordering::Relaxed));
+        release_hidden_pixels(&mut artwork);
     }
 
     /// Adds result `result` to `session`'s artwork as a new layer at the top of the stack (where
-    /// it showed), named after its prompt, as one undo step; returns the layer's id.
+    /// it showed), named after its prompt, as one undo step; returns the layer's id. Its pixels
+    /// are read from its PNG when they aren't in memory.
     pub fn apply_result(&self, session: &CanvasSession, result: u64) -> Option<u64> {
         let mut artwork = self.artwork_of(session);
-        let kept = artwork.results.iter().find(|k| k.id == result)?;
+        // the result applied takes the overlay's place; let the one shown go first
+        if artwork.shown != Some(result) {
+            session.set_overlay(None);
+            artwork.shown = None;
+            release_hidden_pixels(&mut artwork);
+        }
+        let pixels = self.pixels_for(&mut artwork, result)?;
+        let (area, name) = artwork.results.iter().find(|k| k.id == result).map(|k| (k.area, k.name.clone()))?;
         session.set_overlay(None);
-        let layer = session.add_generated(kept.area, kept.pixels.as_slice(), &kept.name);
+        let layer = session.add_generated(area, pixels.as_slice(), &name);
         artwork.shown = None;
+        release_hidden_pixels(&mut artwork);
         layer
     }
 
@@ -891,6 +942,49 @@ impl Generation {
         }
     }
 
+    /// Takes in what a background save wrote: those results are on disk now, so unless one is
+    /// shown its pixels leave memory (the writer's copy went with the job).
+    fn take_saved(&self, artwork: &mut Artwork) {
+        let saved = self.saved.lock();
+        while let Ok(done) = saved.try_recv() {
+            if artwork.folder.as_ref() != Some(&done.folder) {
+                continue;
+            }
+            let shown = artwork.shown;
+            for kept in &mut artwork.results {
+                if done.ids.contains(&kept.id) {
+                    kept.saved = true;
+                    if shown != Some(kept.id) {
+                        kept.pixels = None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Result `id`'s pixels: those in memory, or (when only its PNG has them) read from there and
+    /// kept for the one shown. None if it isn't a result or its PNG can't be read.
+    fn pixels_for(&self, artwork: &mut Artwork, id: u64) -> Option<Arc<Vec<u8>>> {
+        let kept = artwork.results.iter().find(|k| k.id == id)?;
+        if let Some(pixels) = &kept.pixels {
+            return Some(Arc::clone(pixels));
+        }
+        let folder = artwork.folder.clone()?;
+        let area = kept.area;
+        let path = folder.join(RESULTS_DIR).join(result_name(id));
+        let pixels = match crate::project::read_png(&path, area.width(), area.height()) {
+            Ok(pixels) => Arc::new(pixels),
+            Err(e) => {
+                log::warn!("generation: result {id}: {e}");
+                return None;
+            }
+        };
+        if let Some(kept) = artwork.results.iter_mut().find(|k| k.id == id) {
+            kept.pixels = Some(Arc::clone(&pixels));
+        }
+        Some(pixels)
+    }
+
     /// Reads the artwork's results if its folder was set but not read yet.
     fn ensure_loading(&self, artwork: &mut Artwork) {
         if artwork.folder.is_some() && !artwork.loaded && !artwork.loading {
@@ -957,7 +1051,8 @@ impl Generation {
                     name: kept.name.clone(),
                     area: [x0, y0, x1, y1],
                     scaled_from: [scaled_from_width, scaled_from_height],
-                    pixels: Arc::clone(&kept.pixels),
+                    pixels: kept.pixels.as_ref().map(Arc::clone),
+                    thumbnail: kept.thumbnail.clone(),
                 }
             })
             .collect();
@@ -972,11 +1067,15 @@ struct FoundResults {
 }
 
 impl Saver {
-    fn new() -> Saver {
+    fn new(done: mpsc::Sender<SavedResults>) -> Saver {
         let (sender, receiver) = mpsc::channel();
         let started = std::thread::Builder::new().name("generation-save".into()).spawn(move || {
             while let Ok(job) = receiver.recv() {
-                run_save_job(job);
+                if let Some(saved) = run_save_job(job)
+                    && let Err(e) = done.send(saved)
+                {
+                    log::error!("generation: reporting saved results: {e}");
+                }
             }
         });
         let thread = match started {
@@ -1017,10 +1116,13 @@ impl Drop for Saver {
     }
 }
 
-/// Does one saver job, on the saver's thread.
-fn run_save_job(job: SaveJob) {
+/// Does one saver job, on the saver's thread; a save says what it wrote.
+fn run_save_job(job: SaveJob) -> Option<SavedResults> {
     match job {
-        SaveJob::Save { folder, results } => write_results(&folder, &results),
+        SaveJob::Save { folder, results } => {
+            let ids = write_results(&folder, &results);
+            Some(SavedResults { folder, ids })
+        }
         SaveJob::Discard { folder } => {
             let dir = folder.join(RESULTS_DIR);
             match fs::remove_dir_all(&dir) {
@@ -1028,17 +1130,36 @@ fn run_save_job(job: SaveJob) {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => log::error!("generation: discarding results: {e}"),
             }
+            None
         }
     }
 }
 
-/// Writes `results` into `<folder>/generation/`: a lossless PNG each, then the index, each beside
-/// its place until whole and renamed into it. Files the index no longer lists go afterwards.
-fn write_results(folder: &Path, results: &[WriteResult]) {
+/// What a result's PNG is called in `<folder>/generation/`.
+fn result_name(id: u64) -> String {
+    format!("{id}.png")
+}
+
+/// What a result's thumbnail PNG is called beside it.
+fn thumbnail_name(id: u64) -> String {
+    format!("{id}.thumb.png")
+}
+
+/// The result id a PNG in the results folder belongs to, full or thumbnail; none for other files.
+fn result_id(path: &Path) -> Option<u64> {
+    let name = path.file_name()?.to_str()?;
+    let stem = name.strip_suffix(".thumb.png").or_else(|| name.strip_suffix(".png"))?;
+    stem.parse().ok()
+}
+
+/// Writes `results` into `<folder>/generation/`: a lossless PNG and a small thumbnail PNG each,
+/// then the index, each beside its place until whole and renamed into it. Files the index no
+/// longer lists go afterwards; the ids written are returned.
+fn write_results(folder: &Path, results: &[WriteResult]) -> Vec<u64> {
     let dir = folder.join(RESULTS_DIR);
     if let Err(e) = fs::create_dir_all(&dir) {
         log::error!("generation: making the results folder: {e}");
-        return;
+        return Vec::new();
     }
     let mut written = Vec::new();
     let mut index = Vec::new();
@@ -1049,13 +1170,28 @@ fn write_results(folder: &Path, results: &[WriteResult]) {
         if width == 0 || height == 0 {
             continue;
         }
-        let path = dir.join(format!("{}.png", result.id));
+        let path = dir.join(result_name(result.id));
         if !path.is_file() {
+            let Some(pixels) = &result.pixels else {
+                log::error!("generation: result {} has no pixels to write", result.id);
+                continue;
+            };
             let saved = crate::project::write_atomically(&path, |p| {
-                crate::project::write_png(p, width, height, result.pixels.as_slice(), &[])
+                crate::project::write_png(p, width, height, pixels.as_slice(), &[])
             });
             if let Err(e) = saved {
                 log::error!("generation: writing result {}: {e}", result.id);
+                continue;
+            }
+        }
+        let (thumb_width, thumb_height) = (result.thumbnail.width, result.thumbnail.height);
+        let thumb_path = dir.join(thumbnail_name(result.id));
+        if !thumb_path.is_file() {
+            let saved = crate::project::write_atomically(&thumb_path, |p| {
+                crate::project::write_png(p, thumb_width, thumb_height, &result.thumbnail.rgba, &[])
+            });
+            if let Err(e) = saved {
+                log::error!("generation: writing result {}'s thumbnail: {e}", result.id);
                 continue;
             }
         }
@@ -1066,13 +1202,14 @@ fn write_results(folder: &Path, results: &[WriteResult]) {
             name: result.name.clone(),
             area: result.area,
             scaled_from: result.scaled_from,
+            thumbnail: [thumb_width, thumb_height],
         });
     }
     let text = match serde_json::to_vec(&ResultsIndex { version: RESULTS_VERSION, results: index }) {
         Ok(text) => text,
         Err(e) => {
             log::error!("generation: writing the results index: {e}");
-            return;
+            return Vec::new();
         }
     };
     let placed = crate::project::write_atomically(&dir.join(RESULTS_INDEX), |p| {
@@ -1080,27 +1217,30 @@ fn write_results(folder: &Path, results: &[WriteResult]) {
     });
     if let Err(e) = placed {
         log::error!("generation: writing the results index: {e}");
-        return;
+        return Vec::new();
     }
     // Only now that the index is in place: files it doesn't list (the oldest past the limit, or
     // those a save cut short left behind) go.
     clean_results(&dir, &written);
+    written
 }
 
-/// Removes result PNGs in `dir` whose ids `kept` doesn't list.
+/// Removes result PNGs (full and thumbnail) in `dir` whose ids `kept` doesn't list.
 fn clean_results(dir: &Path, kept: &[u64]) {
     let Ok(entries) = fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
         let path = entry.path();
-        let is_png = path.extension().and_then(std::ffi::OsStr::to_str) == Some("png");
-        let id = path.file_stem().and_then(std::ffi::OsStr::to_str).and_then(|s| s.parse::<u64>().ok());
-        if is_png && id.is_some_and(|id| !kept.contains(&id)) {
+        if path.extension().and_then(std::ffi::OsStr::to_str) != Some("png") {
+            continue;
+        }
+        if result_id(&path).is_some_and(|id| !kept.contains(&id)) {
             let _ = fs::remove_file(path);
         }
     }
 }
 
-/// Reads `<folder>/generation/`: the index, then each result's pixels, on a thread of its own.
+/// Reads `<folder>/generation/`: the index and each result's thumbnail, on a thread of its own.
+/// The full pixels stay in their PNGs until a result is shown or applied.
 fn load_results(folder: &Path) -> FoundResults {
     let dir = folder.join(RESULTS_DIR);
     // ids an interrupted save may have written without the index: don't use them again
@@ -1116,33 +1256,42 @@ fn load_results(folder: &Path) -> FoundResults {
     }
     let mut results = Vec::new();
     for saved in index.results {
-        let SavedResult { id, seed, name, area: [x0, y0, x1, y1], scaled_from: [from_width, from_height] } = saved;
+        let SavedResult {
+            id,
+            seed,
+            name,
+            area: [x0, y0, x1, y1],
+            scaled_from: [from_width, from_height],
+            thumbnail: [thumb_width, thumb_height],
+        } = saved;
+        next = next.max(id);
         let area = IRect::new(x0, y0, x1, y1);
         let (width, height) = (area.width(), area.height());
-        // an index damaged anyhow: no result is that large
+        // an index damaged anyhow: no result is that large, and no thumbnail bigger than these
         let most = procraft_engine::document::canvas_edge_most();
         if width == 0 || height == 0 || width > most || height > most {
             continue;
         }
-        let path = dir.join(format!("{id}.png"));
-        let pixels = match crate::project::read_png(&path, width, height) {
-            Ok(pixels) => pixels,
+        if thumb_width == 0 || thumb_height == 0 || thumb_width > THUMBNAIL_SIDE || thumb_height > THUMBNAIL_SIDE {
+            continue;
+        }
+        let path = dir.join(thumbnail_name(id));
+        let rgba = match crate::project::read_png(&path, thumb_width, thumb_height) {
+            Ok(rgba) => rgba,
             Err(e) => {
-                log::warn!("generation: result {id}: {e}");
+                log::warn!("generation: result {id}'s thumbnail: {e}");
                 continue;
             }
         };
-        let (thumb_width, thumb_height, mut rgba) = crate::project::thumbnail(&pixels, width, height, THUMBNAIL_SIDE);
-        premultiply(&mut rgba);
-        next = next.max(id);
         results.push(Kept {
             id,
             seed,
             name,
             area,
-            pixels: Arc::new(pixels),
+            pixels: None,
             thumbnail: ThumbnailImage { width: thumb_width, height: thumb_height, rgba },
             scaled_from: (from_width, from_height),
+            saved: true,
         });
     }
     if results.len() > KEPT_RESULTS {
@@ -1158,9 +1307,7 @@ fn highest_result_id(dir: &Path) -> u64 {
     entries
         .flatten()
         .filter(|entry| entry.path().extension().and_then(std::ffi::OsStr::to_str) == Some("png"))
-        .filter_map(|entry| {
-            entry.path().file_stem().and_then(std::ffi::OsStr::to_str).and_then(|s| s.parse::<u64>().ok())
-        })
+        .filter_map(|entry| result_id(&entry.path()))
         .max()
         .unwrap_or(0)
 }
@@ -1173,6 +1320,17 @@ fn trim_results(artwork: &mut Artwork) -> bool {
         trimmed = true;
     }
     trimmed
+}
+
+/// Lets go of the pixels of every result that isn't shown: its PNG has them, so they can be read
+/// again if it's shown later. A result just made keeps them until the saver says it's written.
+fn release_hidden_pixels(artwork: &mut Artwork) {
+    let shown = artwork.shown;
+    for kept in &mut artwork.results {
+        if kept.saved && shown != Some(kept.id) {
+            kept.pixels = None;
+        }
+    }
 }
 
 fn session_key(session: &CanvasSession) -> usize {
@@ -1270,9 +1428,10 @@ fn keep(id: u64, result: &procraft_diffusion::RunResult, run: &Running, from_srg
         seed: result.seed,
         name: run.name.clone(),
         area,
-        pixels: Arc::new(pixels),
+        pixels: Some(Arc::new(pixels)),
         thumbnail,
         scaled_from,
+        saved: false,
     })
 }
 
@@ -1574,12 +1733,13 @@ mod tests {
         let result = procraft_diffusion::RunResult { seed: 1, picture, generated: (width, height) };
         let kept = keep(1, &result, &run, None).unwrap();
         assert_eq!((kept.area.x0, kept.area.y0, kept.area.x1, kept.area.y1), (26, 26, 174, 174));
-        assert_eq!(kept.pixels.first_chunk::<4>(), Some(&[255, 0, 0, 255]));
+        let pixels = kept.pixels.as_deref().map(Vec::as_slice).unwrap_or_default();
+        assert_eq!(pixels.first_chunk::<4>(), Some(&[255, 0, 0, 255]));
         let outside = (width as usize / 2) * 4;
-        assert_eq!(kept.pixels.get(outside..outside + 4), Some([0, 0, 0, 0].as_slice()));
+        assert_eq!(pixels.get(outside..outside + 4), Some([0, 0, 0, 0].as_slice()));
 
         let Some(s) = session(200) else { return };
-        let id = s.add_generated(kept.area, kept.pixels.as_slice(), &kept.name).unwrap();
+        let id = s.add_generated(kept.area, pixels, &kept.name).unwrap();
         let px = composite(&s);
         assert_eq!(at(&px, 200, 30, 30), [255, 0, 0, 255], "inside the mask");
         assert_eq!(at(&px, 200, 170, 170), [255, 255, 255, 255], "outside it stays clear");
@@ -1596,9 +1756,10 @@ mod tests {
             seed: 1,
             name: "Generated · test".to_owned(),
             area: IRect::new(8, 8, 24, 24),
-            pixels: Arc::new([255u8, 0, 0, 255].repeat(16 * 16)),
+            pixels: Some(Arc::new([255u8, 0, 0, 255].repeat(16 * 16))),
             thumbnail: ThumbnailImage { width: 1, height: 1, rgba: vec![255, 0, 0, 255] },
             scaled_from: (0, 0),
+            saved: false,
         };
         generation.artwork_of(&s).results.push(kept);
         generation.show_result(&s, Some(1));
@@ -1648,9 +1809,10 @@ mod tests {
             seed: 1_000 + id,
             name: format!("Generated · result {id}"),
             area: IRect::from_size(side, side),
-            pixels: Arc::new(pixels),
+            pixels: Some(Arc::new(pixels)),
             thumbnail: thumbnail(&picture).unwrap(),
             scaled_from: (side / 2, side / 2),
+            saved: false,
         }
     }
 
@@ -1691,6 +1853,22 @@ mod tests {
         panic!("the results were not read back");
     }
 
+    /// Waits for the saver to have written every result and the artwork to let its pixels go.
+    fn wait_saved(generation: &Generation) {
+        for _ in 0..500 {
+            let _ = generation.state();
+            let all_saved = {
+                let artwork = generation.artwork.lock();
+                !artwork.results.is_empty() && artwork.results.iter().all(|k| k.saved && k.pixels.is_none())
+            };
+            if all_saved {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("the results were not written and let go");
+    }
+
     #[test]
     fn results_survive_leaving_and_a_new_generation_over_the_folder() {
         let folder = temp_folder("survive");
@@ -1699,7 +1877,7 @@ mod tests {
         generation.set_folder(&s, folder.to_string_lossy().into_owned());
         wait_loaded(&generation);
         let kept = kept_result(7, 8);
-        let pixels = kept.pixels.as_slice().to_vec();
+        let pixels = kept.pixels.as_deref().map(Vec::as_slice).unwrap_or_default().to_vec();
         let scaled_from = kept.scaled_from;
         let name = kept.name.clone();
         generation.artwork_of(&s).results.push(kept);
@@ -1716,11 +1894,76 @@ mod tests {
         {
             let artwork = generation.artwork.lock();
             let loaded = artwork.results.first().expect("the result read back");
-            assert_eq!(loaded.pixels.as_slice(), pixels, "the pixels round-trip exactly");
+            assert!(loaded.pixels.is_none(), "opening reads only the thumbnail");
             assert_eq!(loaded.scaled_from, scaled_from);
             assert_eq!(loaded.name, name);
             assert_eq!(artwork.next, 8, "new results continue after the saved ids");
         }
+        generation.show_result(&s, Some(7));
+        {
+            let artwork = generation.artwork.lock();
+            let shown = artwork.results.first().expect("the result read back");
+            assert_eq!(
+                shown.pixels.as_deref().map(Vec::as_slice),
+                Some(pixels.as_slice()),
+                "the pixels round-trip exactly"
+            );
+        }
+        drop(generation);
+        let _ = fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn saved_results_hold_only_thumbnails_until_shown_or_applied() {
+        let folder = temp_folder("memory");
+        let Some(s) = session(16) else { return };
+        let generation = Generation::new(settings());
+        generation.set_folder(&s, folder.to_string_lossy().into_owned());
+        wait_loaded(&generation);
+        let mut saved = Vec::new();
+        {
+            let mut artwork = generation.artwork_of(&s);
+            for id in 1..=3 {
+                let kept = kept_result(id, 8);
+                let pixels = kept.pixels.as_deref().map(Vec::as_slice).unwrap_or_default().to_vec();
+                saved.push((pixels, kept.thumbnail.clone()));
+                artwork.results.push(kept);
+            }
+        }
+        generation.leave(&s);
+        wait_index(&folder.join(RESULTS_DIR), 3);
+        drop(generation);
+
+        let generation = Generation::new(settings());
+        generation.set_folder(&s, folder.to_string_lossy().into_owned());
+        wait_results(&generation, 3);
+        {
+            let artwork = generation.artwork.lock();
+            for kept in &artwork.results {
+                assert!(kept.pixels.is_none(), "opening reads only the thumbnails");
+            }
+            for (kept, (_, thumbnail)) in artwork.results.iter().zip(&saved) {
+                assert_eq!(&kept.thumbnail, thumbnail, "the thumbnails round-trip");
+            }
+        }
+        generation.show_result(&s, Some(2));
+        {
+            let artwork = generation.artwork.lock();
+            assert_eq!(artwork.shown, Some(2));
+            let held: Vec<u64> = artwork.results.iter().filter(|k| k.pixels.is_some()).map(|k| k.id).collect();
+            assert_eq!(held, vec![2], "only the shown result keeps its pixels");
+            let shown = artwork.results.iter().find(|k| k.id == 2).expect("the shown result");
+            assert_eq!(shown.pixels.as_deref().map(Vec::as_slice), Some(saved[1].0.as_slice()), "read back exactly");
+        }
+        generation.show_result(&s, Some(3));
+        {
+            let artwork = generation.artwork.lock();
+            let held: Vec<u64> = artwork.results.iter().filter(|k| k.pixels.is_some()).map(|k| k.id).collect();
+            assert_eq!(held, vec![3], "showing another lets the first go");
+        }
+        let layer = generation.apply_result(&s, 1).expect("applying a result kept on disk");
+        assert!(s.shared.lock().doc.layer(LayerId(layer)).is_some());
+        assert!(generation.artwork.lock().results.iter().all(|k| k.pixels.is_none()), "apply lets it go");
         drop(generation);
         let _ = fs::remove_dir_all(&folder);
     }
@@ -1742,12 +1985,15 @@ mod tests {
         assert_eq!(state.results.len(), KEPT_RESULTS);
         assert_eq!(state.results.first().map(|r| r.id), Some(2), "the oldest went");
         assert_eq!(state.results.last().map(|r| r.id), Some(25));
+        wait_saved(&generation);
         drop(generation);
 
         let dir = folder.join(RESULTS_DIR);
         assert!(!dir.join("1.png").exists(), "the oldest is deleted");
+        assert!(!dir.join("1.thumb.png").exists(), "its thumbnail too");
         for id in 2..=25 {
             assert!(dir.join(format!("{id}.png")).is_file(), "result {id}");
+            assert!(dir.join(format!("{id}.thumb.png")).is_file(), "result {id}'s thumbnail");
         }
         let index: ResultsIndex = serde_json::from_slice(&fs::read(dir.join(RESULTS_INDEX)).unwrap()).unwrap();
         assert_eq!(index.results.len(), KEPT_RESULTS);
@@ -1767,6 +2013,7 @@ mod tests {
         let dir = folder.join(RESULTS_DIR);
         wait_index(&dir, 1);
         assert!(dir.join("3.png").is_file());
+        assert!(dir.join("3.thumb.png").is_file());
         generation.discard_results(&s);
         drop(generation);
         assert!(!dir.exists(), "the results and their index go");
@@ -1780,6 +2027,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let side = 8;
         let kept = kept_result(7, side);
+        let pixels = kept.pixels.as_deref().map(Vec::as_slice).unwrap_or_default();
         let index = ResultsIndex {
             version: RESULTS_VERSION,
             results: vec![SavedResult {
@@ -1788,18 +2036,28 @@ mod tests {
                 name: kept.name.clone(),
                 area: [0, 0, side as i32, side as i32],
                 scaled_from: [side / 2, side / 2],
+                thumbnail: [kept.thumbnail.width, kept.thumbnail.height],
             }],
         };
         fs::write(dir.join(RESULTS_INDEX), serde_json::to_vec(&index).unwrap()).unwrap();
-        crate::project::write_png(&dir.join("7.png"), side, side, kept.pixels.as_slice(), &[]).unwrap();
+        crate::project::write_png(&dir.join("7.png"), side, side, pixels, &[]).unwrap();
+        crate::project::write_png(
+            &dir.join("7.thumb.png"),
+            kept.thumbnail.width,
+            kept.thumbnail.height,
+            &kept.thumbnail.rgba,
+            &[],
+        )
+        .unwrap();
         // a save cut short after writing its new index beside the old one, before the rename
         fs::write(dir.join("index.1.tmp"), b"{ not an index").unwrap();
         // and a picture it wrote before it stopped: the old index still rules, its id is not reused
-        crate::project::write_png(&dir.join("9.png"), side, side, kept.pixels.as_slice(), &[]).unwrap();
+        crate::project::write_png(&dir.join("9.png"), side, side, pixels, &[]).unwrap();
         let found = load_results(&folder);
         assert_eq!(found.results.len(), 1);
         assert_eq!(found.results.first().map(|k| k.id), Some(7));
-        assert_eq!(found.results.first().map(|k| k.pixels.as_slice()), Some(kept.pixels.as_slice()));
+        assert_eq!(found.results.first().map(|k| k.thumbnail.clone()), Some(kept.thumbnail.clone()));
+        assert_eq!(found.results.first().map(|k| k.pixels.is_none()), Some(true), "only the thumbnail is read");
         assert_eq!(found.next, 10, "past the picture the cut-short save wrote");
         let _ = fs::remove_dir_all(&folder);
     }

@@ -528,13 +528,16 @@ A style (`styles/anima.json`, our own file):
   artwork with control layers opened in upstream ProCraft just ignores the field.
 - **Results** (brought forward from Phase 2): kept in the artwork's folder, in a private
   `generation/` subfolder that no export reads. `index.json` lists every result in order (its id,
-  seed, name, area and scaled_from) and `<id>.png` holds its pixels losslessly (premultiplied RGBA8,
-  in the canvas's colours). They are written on a background thread, each PNG and the index beside
-  its final name until whole and then renamed, the index last; an interrupted save leaves the last
-  index whole. At most 24 are kept per artwork: adding another drops and deletes the oldest.
-  Discard deletes them; opening the artwork reads them back on a background thread and they appear
-  in the bar when ready. `set_folder` tells generation where the open artwork lives. An app built
-  without the `generation` feature ignores the folder.
+  seed, name, area, scaled_from and thumbnail size), `<id>.png` holds its pixels losslessly
+  (premultiplied RGBA8, in the canvas's colours) and `<id>.thumb.png` its small picture. They are
+  written on a background thread, each PNG and the index beside its final name until whole and
+  then renamed, the index last; an interrupted save leaves the last index whole. At most 24 are
+  kept per artwork: adding another drops and deletes the oldest. Discard deletes them; opening the
+  artwork reads only the thumbnails, on a background thread, and they appear in the bar when ready.
+  Only the shown result keeps its full pixels in memory (read from its PNG then, dropped when
+  another is shown), as does one just made until it is written; `apply_result` reads them if
+  needed. `set_folder` tells generation where the open artwork lives. An app built without the
+  `generation` feature ignores the folder.
 - Nothing else in Phase 1 (history: Phase 2).
 - App-wide, kept like ProCraft's other preferences (Android `SharedPreferences`, desktop's
   `interface` file): server address, NSFW switch, last style, recent prompts (20).
