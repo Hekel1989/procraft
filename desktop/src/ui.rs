@@ -54,6 +54,8 @@ enum Popover {
     Brushes,
     Layers,
     Colour,
+    #[cfg(feature = "generation")]
+    Generate,
 }
 
 pub struct Interface {
@@ -132,6 +134,9 @@ pub struct Interface {
     /// The Prefs tab's settings (kept between runs), whether the side bar shows, and the licences
     /// while they show.
     prefs: crate::prefs::Prefs,
+    /// Image generation: its popover, results bar and the app's server.
+    #[cfg(feature = "generation")]
+    generation: crate::generation::GenerationUi,
     side_bar_shown: bool,
     licences: bool,
     /// The keyboard shortcuts' list, from Help or while Ctrl (⌘) is held.
@@ -221,6 +226,8 @@ impl Default for Interface {
             tool_hold_acted: false,
             brushes_were_open: false,
             prefs: crate::prefs::Prefs::kept(),
+            #[cfg(feature = "generation")]
+            generation: crate::generation::GenerationUi::from_prefs(&crate::prefs::Prefs::kept()),
             side_bar_shown: true,
             licences: false,
             shortcut_list: Default::default(),
@@ -296,6 +303,8 @@ impl Interface {
     /// The artwork is put away (to the gallery, for another, or with the window): brushes coming
     /// in from files are waited for, Recolor ends keeping what it filled, and Layer Opacity ends.
     pub fn closing(&mut self, session: &CanvasSession) {
+        #[cfg(feature = "generation")]
+        self.generation.leave(session);
         self.library.finish_importing(session);
         self.end_recolor(session);
         session.set_touch_layer_opacity(None);
@@ -440,7 +449,13 @@ impl Interface {
         if let Some(opacity) = session.touch_layer_opacity().filter(|_| !self.bars_hidden) {
             crate::adjustments::layer_opacity_bar(&ctx, opacity, pc::BAR_HEIGHT);
         }
+        #[cfg(feature = "generation")]
+        self.generation.poll(&ctx);
         let lit = Lit {
+            #[cfg(feature = "generation")]
+            generate: self.open == Some(Popover::Generate),
+            #[cfg(feature = "generation")]
+            generating: self.generation.progress(),
             actions: self.open == Some(Popover::Actions),
             transform: self.transform.on,
             selection: self.selection.on,
@@ -574,6 +589,8 @@ impl Interface {
             Some(BarButton::Transform) => self.toggle_transform(session),
             Some(BarButton::Selection) => self.toggle_selection(session),
             Some(BarButton::Adjustments) => self.adjustments_pressed(session),
+            #[cfg(feature = "generation")]
+            Some(BarButton::Generate) => self.toggle(session, Popover::Generate),
             Some(BarButton::Colour) | None => {}
         }
         // the colour button: tapped it opens the colours, held it goes back to the previous
@@ -648,6 +665,8 @@ impl Interface {
             Popover::Brushes => bar.rect(tool_button),
             Popover::Layers => bar.rect(BarButton::Layers),
             Popover::Colour => bar.rect(BarButton::Colour),
+            #[cfg(feature = "generation")]
+            Popover::Generate => bar.rect(BarButton::Generate),
         };
         if let Some(open) = self.open {
             self.popover(&ctx, session, open, anchor(open), info.tool, &mut backdrops);
@@ -665,6 +684,14 @@ impl Interface {
         }
         self.transform.show(&ctx, &mut self.look, session, &mut backdrops);
         self.selection.show(&ctx, &mut self.look, session, pc::BAR_HEIGHT);
+        // the results bar, out of the way of the modes' own bars
+        #[cfg(feature = "generation")]
+        if !self.transform.on && !self.selection.on && session.adjustment_shown().adjustment.is_none() {
+            let asked = self.generation.results_bar(&ctx, &mut self.look, session, &mut backdrops);
+            if let Some(crate::generation::Asked::Notice(text, warning)) = asked {
+                self.overlays.notice(text, warning);
+            }
+        }
         if let Some(asked) = self.adjustments.show(
             &ctx,
             &mut self.look,
@@ -1759,6 +1786,16 @@ impl Interface {
         self.open = if self.open == Some(popover) { None } else { Some(popover) };
     }
 
+    /// Image generation's server or NSFW changed: kept with the preferences.
+    #[cfg(feature = "generation")]
+    fn keep_generation_settings(&mut self) {
+        if std::mem::take(&mut self.generation.settings_changed) {
+            self.prefs.generation_address = self.generation.settings.address.clone();
+            self.prefs.generation_nsfw = self.generation.settings.nsfw;
+            self.prefs.keep();
+        }
+    }
+
     /// The modes open now, as the core's [`mode_switch`] takes them.
     fn open_modes(&self, session: &CanvasSession) -> Modes {
         Modes {
@@ -1823,6 +1860,8 @@ impl Interface {
             Popover::Colour => self.colours.modal(),
             Popover::Actions => self.licences || self.actions_panel.modal(),
             Popover::Adjustments => false,
+            #[cfg(feature = "generation")]
+            Popover::Generate => false,
         };
         let shown = match which {
             Popover::Brushes => {
@@ -1861,6 +1900,12 @@ impl Interface {
                     self.open = None;
                 }
                 rect
+            }
+            #[cfg(feature = "generation")]
+            Popover::Generate => {
+                let shown = self.generation.popover(ctx, &mut self.look, session, button, backdrops);
+                self.keep_generation_settings();
+                shown
             }
             Popover::Adjustments => {
                 let (shown, tapped) = crate::adjustments::menu(ctx, &mut self.look, button, backdrops);
@@ -1917,6 +1962,11 @@ impl Interface {
                         }
                     }
                     Some(Act::Licences) => self.licences = true,
+                    #[cfg(feature = "generation")]
+                    Some(Act::GenerationSettings) => {
+                        self.generation.open_server();
+                        self.open = Some(Popover::Generate);
+                    }
                     Some(Act::Shortcuts) => {
                         self.open = None;
                         self.shortcut_list.open = true;
@@ -2054,6 +2104,11 @@ impl Interface {
         }
         if pressed(Modifiers::COMMAND, Key::N) {
             self.actions.push(Action::New);
+        }
+        // G opens and closes image generation's popover
+        #[cfg(feature = "generation")]
+        if pressed(Modifiers::NONE, Key::G) {
+            self.toggle(session, Popover::Generate);
         }
         if pressed(Modifiers::COMMAND, Key::O) {
             self.actions.push(Action::Open);

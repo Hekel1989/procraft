@@ -85,6 +85,9 @@ pub struct Prefs {
     pub drag_image_format: usize,
     /// Recolor's Flood, kept from one time to the next.
     pub recolor_threshold: f32,
+    /// Image generation's server, as `host:port` (empty: none), and NSFW allowed.
+    pub generation_address: String,
+    pub generation_nsfw: bool,
 }
 
 impl Default for Prefs {
@@ -122,6 +125,8 @@ impl Default for Prefs {
             drag_format: 0,
             drag_image_format: 0,
             recolor_threshold: 0.0,
+            generation_address: String::new(),
+            generation_nsfw: false,
         }
     }
 }
@@ -187,6 +192,8 @@ impl Prefs {
                     p.drag_image_format = value.parse::<usize>().map_or(0, |t| t.min(DRAG_IMAGE_FORMATS.len() - 1))
                 }
                 "recolor_threshold" => p.recolor_threshold = unit.unwrap_or(0.0),
+                "generation_address" => p.generation_address = value.trim().to_owned(),
+                "generation_nsfw" => p.generation_nsfw = on,
                 "actions_tab" => p.actions_tab = value.parse::<usize>().map_or(0, |t| t.min(5)),
                 "curve" => {
                     let numbers: Vec<f32> = value.split(',').filter_map(|v| v.parse().ok()).collect();
@@ -238,6 +245,8 @@ impl Prefs {
             format!("drag_format {}", self.drag_format),
             format!("drag_image_format {}", self.drag_image_format),
             format!("recolor_threshold {}", self.recolor_threshold),
+            format!("generation_address {}", self.generation_address),
+            format!("generation_nsfw {}", self.generation_nsfw),
         ];
         crate::files::keep_text("interface", &(lines.join("\n") + "\n"));
     }

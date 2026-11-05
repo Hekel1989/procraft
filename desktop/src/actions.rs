@@ -56,6 +56,9 @@ const TAB_IN_S: f32 = 0.2;
 /// [`Act::Prefs`] tells it a setting changed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Act {
+    /// Image generation's server view, in the Generate popover.
+    #[cfg(feature = "generation")]
+    GenerationSettings,
     InsertFile,
     InsertPhoto,
     /// Insert a file or a photo, or Paste, swiped open: what they bring goes on a private layer.
@@ -351,6 +354,8 @@ fn groups(tab: usize, showing: &Showing, prefs: &Prefs) -> Vec<Vec<Row>> {
                 vec![
                     Button("Pressure and Smoothing", None, Some(Act::Page(Page::Pressure))),
                     Button("Gesture controls", None, Some(Act::GestureControls)),
+                    #[cfg(feature = "generation")]
+                    Button("Image generation", None, Some(Act::GenerationSettings)),
                 ],
                 vec![
                     Slide(

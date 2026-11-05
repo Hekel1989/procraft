@@ -17,6 +17,9 @@ pub enum BarButton {
     Adjustments,
     Selection,
     Transform,
+    /// Image generation's popover.
+    #[cfg(feature = "generation")]
+    Generate,
     Paint,
     Smudge,
     Erase,
@@ -32,6 +35,11 @@ pub struct Lit {
     pub selection: bool,
     pub transform: bool,
     pub layers: bool,
+    /// Image generation's popover is open; a run's progress (0..1) while one goes.
+    #[cfg(feature = "generation")]
+    pub generate: bool,
+    #[cfg(feature = "generation")]
+    pub generating: Option<f32>,
     /// A panel takes the highlight from the current tool while open.
     pub panel_open: bool,
 }
@@ -103,6 +111,12 @@ pub fn top_bar(ui: &mut Ui, look: &mut Look, tool: ToolKind, colour: Color32, br
             (BarButton::Selection, &icons::SELECTION, 33.0, lit.selection),
             (BarButton::Transform, &icons::TRANSFORM, 44.0, lit.transform),
         ];
+        #[cfg(feature = "generation")]
+        let actions = {
+            let mut all = actions.to_vec();
+            all.push((BarButton::Generate, &crate::generation::GENERATE, 40.0, lit.generate));
+            all
+        };
         for (which, icon, glyph, on) in actions {
             let rect = button(x, pc::BAR_BUTTON_WIDTH);
             tap(ui, which, rect);
@@ -110,6 +124,12 @@ pub fn top_bar(ui: &mut Ui, look: &mut Look, tool: ToolKind, colour: Color32, br
             let disc = mix(argb(pc::ACTION_DISC), argb(pc::BAR_GLYPH_SELECTED), l);
             ui.painter().circle_filled(rect.center(), pc::ACTION_DISC_SIZE / 2.0, disc);
             look.icon(ui, icon, rect.center(), glyph, mix(argb(pc::ACTION_GLYPH), Color32::WHITE, l));
+            #[cfg(feature = "generation")]
+            if which == BarButton::Generate
+                && let Some(done) = lit.generating
+            {
+                progress_ring(ui, rect.center(), pc::ACTION_DISC_SIZE / 2.0 + 2.5, done);
+            }
             x += pc::BAR_BUTTON_WIDTH + action_gap;
         }
 
@@ -143,6 +163,20 @@ pub fn top_bar(ui: &mut Ui, look: &mut Look, tool: ToolKind, colour: Color32, br
         bar.rects.push((BarButton::Colour, colour_rect));
     });
     bar
+}
+
+/// A run's progress round a bar button: a thin accent arc from the top, clockwise.
+#[cfg(feature = "generation")]
+fn progress_ring(ui: &Ui, centre: egui::Pos2, radius: f32, done: f32) {
+    let steps = 64;
+    let end = (done.clamp(0.02, 1.0) * steps as f32).round() as usize;
+    let points: Vec<egui::Pos2> = (0..=end)
+        .map(|i| {
+            let a = -std::f32::consts::FRAC_PI_2 + i as f32 / steps as f32 * std::f32::consts::TAU;
+            centre + vec2(a.cos(), a.sin()) * radius
+        })
+        .collect();
+    ui.painter().add(egui::Shape::line(points, Stroke::new(2.0, argb(pc::ACCENT))));
 }
 
 /// The side bar's sliders.

@@ -7,6 +7,11 @@ publish.workspace = true
 license.workspace = true
 description = "ProCraft on the desktop (Windows, macOS, Linux): the same engine and canvas, with an egui interface"
 
+[features]
+default = ["generation"]
+# image generation on a ComfyUI server (procraft-core's generation)
+generation = ["procraft-core/generation"]
+
 [[bin]]
 name = "procraft"
 path = "src/main.rs"
