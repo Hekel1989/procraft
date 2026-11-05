@@ -45,6 +45,8 @@ const OK: u32 = 0xFF3CCF6E;
 const WARN: u32 = 0xFFF2B440;
 const BAD: u32 = 0xFFE84F51;
 const THUMB: f32 = 66.0;
+/// The results bar's ‹ and › when it's scrolled.
+const CHEVRON: f32 = 24.0;
 /// How often the run and the server are looked at while something is under way.
 const POLL: Duration = Duration::from_millis(100);
 /// The resolution choices, in the row's order.
@@ -92,6 +94,8 @@ pub struct GenerationUi {
     server: ServerStatus,
     thumbnails: HashMap<u64, TextureHandle>,
     preview: Option<(u64, TextureHandle)>,
+    /// How many results the bar is scrolled back from the newest.
+    back: usize,
     /// The last run's settings, for Again.
     last: Option<RunSettings>,
 }
@@ -138,6 +142,7 @@ impl GenerationUi {
             server,
             thumbnails: HashMap::new(),
             preview: None,
+            back: 0,
             last: None,
         }
     }
@@ -248,14 +253,18 @@ impl GenerationUi {
                 (if all { OK } else { WARN }, self.server.address.clone())
             }
         };
+        // the server, as a button: its settings (address, NSFW, largest picture) behind it
         let right = body.right() - 24.0;
-        let at = pos2(right, body.top() + 36.0);
+        let at = pos2(right - 22.0, body.top() + 36.0);
         let w = text_width(ui.painter(), &words, 13.0, Weight::Regular);
-        text(ui.painter(), at, Align2::RIGHT_CENTER, &words, 13.0, Weight::Regular, argb(DIM));
-        let dot = pos2(right - w - 10.0, at.y);
-        ui.painter().circle_filled(dot, 4.5, argb(colour));
-        let hit = Rect::from_min_max(pos2(dot.x - 10.0, at.y - 14.0), pos2(right, at.y + 14.0));
-        if ui.interact(hit, ui.scope_id().with("server dot"), Sense::click()).clicked() {
+        let button = Rect::from_min_max(pos2(at.x - w - 27.0, at.y - 15.0), pos2(right, at.y + 15.0));
+        let response = ui.interact(button, ui.scope_id().with("server button"), Sense::click());
+        let fill = if response.hovered() { argb(FIELD) } else { argb(ROW) };
+        ui.painter().rect_filled(button, 10.0, fill);
+        text(ui.painter(), at, Align2::RIGHT_CENTER, &words, 13.0, Weight::Regular, argb(INK));
+        text(ui.painter(), pos2(right - 9.0, at.y), Align2::RIGHT_CENTER, "›", 17.0, Weight::Regular, argb(DIM));
+        ui.painter().circle_filled(pos2(at.x - w - 12.0, at.y), 4.5, argb(colour));
+        if response.clicked() {
             self.view = View::Server;
         }
     }
@@ -787,11 +796,45 @@ impl GenerationUi {
             ui.painter().rect_filled(rect, 22.0, argb(BAR_FILL));
             let cy = rect.center().y;
             let mut x = rect.left() + 16.0;
-            // the thumbnails, oldest first, as many as fit before the buttons
-            let room = ((width - 16.0 - 330.0) / (THUMB + 10.0)).floor().max(1.0) as usize;
+            // the thumbnails, oldest first, as many as fit before the buttons; older ones behind a
+            // ‹ (and newer behind a ›) when scrolled, by those or the mouse wheel
+            let room = ((width - 16.0 - 330.0 - 2.0 * CHEVRON) / (THUMB + 10.0)).floor().max(1.0) as usize;
             let shown = self.state.shown;
-            let skip = (self.state.results.len() + usize::from(self.state.running.is_some())).saturating_sub(room);
-            for r in self.state.results.iter().skip(skip) {
+            let total = self.state.results.len() + usize::from(self.state.running.is_some());
+            let most_back = total.saturating_sub(room);
+            let strip = Rect::from_min_max(
+                pos2(rect.left(), rect.top()),
+                pos2(rect.left() + 16.0 + 2.0 * CHEVRON + room as f32 * (THUMB + 10.0), rect.bottom()),
+            );
+            if ui.rect_contains_pointer(strip) {
+                // whole wheel notches, not the smoothed delta, so one notch moves one result
+                let wheel: f32 = ui.input(|i| {
+                    i.raw
+                        .events
+                        .iter()
+                        .filter_map(|e| match e {
+                            egui::Event::MouseWheel { delta, .. } => Some(delta.y + delta.x),
+                            _ => None,
+                        })
+                        .sum()
+                });
+                if wheel > 0.0 {
+                    self.back += 1;
+                } else if wheel < 0.0 {
+                    self.back = self.back.saturating_sub(1);
+                }
+            }
+            self.back = self.back.min(most_back);
+            let skip = most_back - self.back;
+            if skip > 0 {
+                let cell = Rect::from_min_size(pos2(x, cy - THUMB / 2.0), vec2(CHEVRON, THUMB));
+                text(ui.painter(), cell.center(), Align2::CENTER_CENTER, "‹", 26.0, Weight::Regular, argb(INK));
+                if ui.interact(cell, ui.scope_id().with("older"), Sense::click()).clicked() {
+                    self.back += room.max(1);
+                }
+            }
+            x += CHEVRON;
+            for r in self.state.results.iter().skip(skip).take(room) {
                 let cell = Rect::from_min_size(pos2(x, cy - THUMB / 2.0), vec2(THUMB, THUMB));
                 if let Some(t) = self.thumbnails.get(&r.id) {
                     ui.painter().image(
@@ -815,7 +858,15 @@ impl GenerationUi {
                 }
                 x += THUMB + 10.0;
             }
-            if let Some(run) = &self.state.running {
+            if self.back > 0 {
+                let cell = Rect::from_min_size(pos2(x, cy - THUMB / 2.0), vec2(CHEVRON, THUMB));
+                text(ui.painter(), cell.center(), Align2::CENTER_CENTER, "›", 26.0, Weight::Regular, argb(INK));
+                if ui.interact(cell, ui.scope_id().with("newer"), Sense::click()).clicked() {
+                    self.back = self.back.saturating_sub(room.max(1));
+                }
+                x += CHEVRON;
+            }
+            if let Some(run) = self.state.running.as_ref().filter(|_| self.back == 0) {
                 let cell = Rect::from_min_size(pos2(x, cy - THUMB / 2.0), vec2(THUMB, THUMB));
                 ui.painter().rect_filled(cell, 10.0, Color32::from_gray(42));
                 if let Some(p) = &run.preview {
