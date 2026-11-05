@@ -1,8 +1,8 @@
 name: Upstream sync
 
 # ProCraft Diffusion follows ProCraft (artcraft-android/procraft). Once a day, and by hand (Actions >
-# Upstream sync > Run workflow), this merges ProCraft's latest main into feat/generation on the
-# runner, then runs ProCraft's own checks and ours. Nothing lands on feat/generation by itself:
+# Upstream sync > Run workflow), this merges ProCraft's latest main into main-diffusion on the
+# runner, then runs ProCraft's own checks and ours. Nothing lands on main-diffusion by itself:
 # - merged and passing: the result is pushed to the branch sync/upstream, ready to take in
 #   (`git merge origin/sync/upstream`, or ask the agent);
 # - a conflict or a failing check: the run fails (GitHub emails), and its summary says what.
@@ -22,7 +22,7 @@ env:
   CARGO_TERM_COLOR: always
   RUST_VERSION: "1.99.0"
   NDK_VERSION: "29.0.14206865"
-  BRANCH: feat/generation
+  BRANCH: main-diffusion
 
 jobs:
   sync:
@@ -97,5 +97,5 @@ jobs:
           {
             echo "## Ready: ${{ steps.merge.outputs.new }} ProCraft commits merge cleanly and pass"
             echo
-            echo 'Take them in with `git merge origin/sync/upstream` on feat/generation (or ask the agent).'
+            echo 'Take them in with `git merge origin/sync/upstream` on main-diffusion (or ask the agent).'
           } >> "$GITHUB_STEP_SUMMARY"

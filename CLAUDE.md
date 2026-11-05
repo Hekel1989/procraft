@@ -3,7 +3,7 @@
 > `AGENTS.md` is an exact copy of this file. Change both together (`cp CLAUDE.md AGENTS.md`).
 
 This is a fork of [ProCraft](https://github.com/artcraft-android/procraft) (`Hekel1989/procraft`),
-branch `feat/generation`, adding AI image generation in the spirit of krita-ai-diffusion, in
+branch `main-diffusion` (the fork's default; its `main` is a plain copy of ProCraft's, left as is), adding AI image generation in the spirit of krita-ai-diffusion, in
 ProCraft's own design language. It goes upstream later.
 
 ## How the user works
@@ -38,7 +38,10 @@ ProCraft's own design language. It goes upstream later.
   `android/app/src/main/res/values/strings.xml`, `SettingsActivity.kt`'s title, `GalleryScreen.kt`'s title and About, and
   `android/app/build.gradle.kts`'s `applicationId`. The Kotlin namespace, the `.procraft` file
   format and the Linux window class stay ProCraft's. For an upstream PR, leave the rename out.
-- **Following upstream**: merge ProCraft's `main` (remote `upstream`) into `feat/generation` often,
+- **Branches**: `main-diffusion` is ours and the default (named `feat/generation` until
+  2026-11-05). `main` is a copy of ProCraft's: on GitHub, "Sync fork" is safe there, never on
+  `main-diffusion` (its "Discard commits" would throw our work away).
+- **Following upstream**: merge ProCraft's `main` (remote `upstream`) into `main-diffusion` often,
   so conflicts stay small. `.github/workflows/upstream-sync.yml` tries it daily on GitHub: when
   it merges and passes, the result is on `origin/sync/upstream` (`git merge origin/sync/upstream`);
   when not, the run fails with the files to resolve in its summary.
