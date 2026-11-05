@@ -43,10 +43,22 @@ ProCraft's own design language. It goes upstream later.
   `main-diffusion` (its "Discard commits" would throw our work away).
 - **Following upstream**: merge ProCraft's `main` (remote `upstream`) into `main-diffusion` often,
   so conflicts stay small. `.github/workflows/upstream-sync.yml` tries it daily at 08:00 London
-  time on GitHub and only checks (it can't push: GitHub refuses workflow-file pushes from its
-  token). A passing run means `git fetch upstream && git merge upstream/main` here gives the same
-  clean merge; a failing one lists the conflicting files or the failing check in its summary.
-  `gh` needs `-R Hekel1989/procraft` (it otherwise picks ProCraft's repository).
+  time on GitHub and **only checks**: it can't push, because GitHub refuses pushes carrying
+  workflow files from a workflow's own token, and the user chose not to keep a personal token as
+  a secret. Don't bring back a push or a `sync/upstream` branch. `gh` needs
+  `-R Hekel1989/procraft` (it otherwise picks ProCraft's repository).
+- **Taking in ProCraft's changes** (when the user asks, e.g. after a passing run):
+  1. `git status` clean, on `main-diffusion`; `git fetch upstream`;
+     `git rev-list --count HEAD..upstream/main` gives the number of new commits.
+  2. `git merge --no-ff --no-edit -m "chore: merge ProCraft's main (N commits)" upstream/main`.
+     On a conflict, keep both sides' behaviour; keep our hooks thin (see below). Fix and commit.
+  3. All of "Building and checking", plus `cargo clippy --workspace --all-targets -- -D warnings`
+     and `cargo test -p procraft-gpu -p procraft-desktop` (ProCraft's own checks).
+  4. If ProCraft changed `crates/gpu/src/canvas.rs`, the layer menus, `Chrome.kt` or the
+     Generate entry points, try Generate on the tablet (a safe prompt) before pushing.
+  5. Push `main-diffusion` only when the user has asked. Never use GitHub's "Sync fork" on it.
+- **The user's plain guide** to all this is `docs/fork-guide.md`: keep it in step when the routine
+  changes.
 - **Keep the hooks into ProCraft's own files thin**: new code goes in our own files (the
   `generation` modules, `crates/diffusion`, `android/app/src/generation`) and connects with a line
   or two. The usual conflict spots: `crates/core/src/lib.rs`, `desktop/src/ui.rs`,
