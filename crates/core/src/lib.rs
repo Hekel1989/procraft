@@ -105,9 +105,9 @@ pub use frame::{configure, screen_profile};
 pub use gallery::{ArtworkStore, GalleryArtwork, GalleryEntry, ZipKind, zip_file_kind};
 #[cfg(feature = "generation")]
 pub use generation::{
-    ControlLayerInfo, ControlSetting, FeatureStatus, Generation, GenerationError, GenerationFeature, GenerationMode,
-    GenerationResolution, GenerationSettings, GenerationState, ResultInfo, RunInfo, RunSettings, SelectionInfo,
-    ServerConnection, ServerStatus, SizeInfo, StyleInfo, generation_address,
+    ControlLayerInfo, ControlSetting, ControlStep, FeatureStatus, Generation, GenerationError, GenerationFeature,
+    GenerationMode, GenerationResolution, GenerationSettings, GenerationState, ResultInfo, RunInfo, RunSettings,
+    SelectionInfo, ServerConnection, ServerStatus, SizeInfo, StyleInfo, generation_address,
 };
 #[cfg(feature = "generation")]
 pub use generation_tags::{TagCompletion, TagKind, TagSuggestion};

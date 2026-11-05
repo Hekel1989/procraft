@@ -16,20 +16,32 @@ pub enum SelectionMode {
     Expand,
 }
 
-/// What a layer's lines are like: clean line art, followed closely, or rough scribbles, followed
-/// loosely.
+/// What a layer's lines are like: clean line art or rough scribbles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ControlKind {
     LineArt,
     Scribble,
 }
 
+/// How closely a control layer is followed: from a loose shaping of the picture's start to lines
+/// held to the last step.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ControlStep {
+    Loose,
+    #[default]
+    Balanced,
+    Close,
+    Strict,
+}
+
 /// A layer's pixels to guide generation with: its picture at the request's area (straight RGBA,
-/// white lines on black), its kind and how strongly to follow it (0..1).
+/// white lines on black), its kind, how strongly to follow it (0..1) and how far through sampling
+/// that applies (0..1).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Control {
     pub kind: ControlKind,
     pub strength: f32,
+    pub end_percent: f32,
     pub picture: Picture,
 }
 

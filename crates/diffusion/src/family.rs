@@ -5,7 +5,7 @@ mod anima;
 
 use crate::comfy::ServerModels;
 use crate::plan::Plan;
-use crate::{Error, Graph, Request};
+use crate::{ControlStep, Error, Graph, Request};
 
 /// A family of diffusion models that share a text encoder, a VAE and their graphs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -111,6 +111,14 @@ impl Family {
     pub(crate) fn second_pass_denoise(self) -> f64 {
         match self {
             Family::Anima => anima::SECOND_PASS_DENOISE,
+        }
+    }
+
+    /// How closely a control layer is followed at `step`: its strength and how far through
+    /// sampling that applies.
+    pub fn control_settings(self, step: ControlStep) -> (f32, f32) {
+        match self {
+            Family::Anima => anima::control_settings(step),
         }
     }
 

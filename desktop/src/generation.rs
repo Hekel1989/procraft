@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use egui::{Align2, Color32, Id, Order, Rect, Sense, TextureHandle, TextureOptions, Ui, UiBuilder, pos2, vec2};
 use procraft_core::{
-    CanvasSession, ControlLayerInfo, ControlSetting, Generation, GenerationMode, GenerationResolution,
+    CanvasSession, ControlLayerInfo, ControlSetting, ControlStep, Generation, GenerationMode, GenerationResolution,
     GenerationSettings, GenerationState, LayerControl, RunSettings, SelectionInfo, ServerConnection, ServerStatus,
     SizeInfo, ThumbnailImage,
 };
@@ -47,7 +47,7 @@ const WARN: u32 = 0xFFF2B440;
 const BAD: u32 = 0xFFE84F51;
 const THUMB: f32 = 66.0;
 /// A control layer's row in the form.
-const CONTROL_ROW: f32 = 48.0;
+const CONTROL_ROW: f32 = 76.0;
 /// The results bar's ‹ and › when it's scrolled.
 const CHEVRON: f32 = 24.0;
 /// How long a thumbnail is held, in seconds, before its Delete shows.
@@ -58,6 +58,8 @@ const POLL: Duration = Duration::from_millis(100);
 const RESOLUTIONS: [GenerationResolution; 3] =
     [GenerationResolution::Draft, GenerationResolution::Normal, GenerationResolution::Quality];
 const RESOLUTION_NAMES: [&str; 3] = ["Draft", "Normal", "Quality"];
+const STEPS: [ControlStep; 4] = [ControlStep::Loose, ControlStep::Balanced, ControlStep::Close, ControlStep::Strict];
+const STEP_NAMES: [&str; 4] = ["Loose", "Balanced", "Close", "Strict"];
 const MODES: [GenerationMode; 4] =
     [GenerationMode::Fill, GenerationMode::Add, GenerationMode::Remove, GenerationMode::Expand];
 const MODE_NAMES: [&str; 4] = ["Fill", "Add", "Remove", "Expand"];
@@ -107,12 +109,12 @@ pub struct GenerationUi {
     deleting: Option<u64>,
     /// The last run's settings, for Again.
     last: Option<RunSettings>,
-    /// The control layers the popover lists, their pictures, and the strength each was given while
-    /// the app runs.
+    /// The control layers the popover lists, their pictures, and the step each was given while the
+    /// app runs.
     controls: Vec<ControlLayerInfo>,
     control_signature: Vec<(u64, String, Option<LayerControl>, bool, u64)>,
     control_pictures: HashMap<u64, TextureHandle>,
-    control_strengths: HashMap<u64, f32>,
+    control_steps: HashMap<u64, ControlStep>,
 }
 
 impl GenerationUi {
@@ -167,13 +169,17 @@ impl GenerationUi {
             controls: Vec::new(),
             control_signature: Vec::new(),
             control_pictures: HashMap::new(),
-            control_strengths: HashMap::new(),
+            control_steps: HashMap::new(),
         }
     }
 
     /// Looks at the run and the server again; asks for frames while something is under way.
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.state = self.generation.state();
+        if self.state.made_layer.is_some() {
+            // an extracted control layer landed: the popover reads the layers again next frame
+            self.control_signature.clear();
+        }
         self.server = self.generation.server();
         if crate::prefs::set_generation_recent(self.generation.recent_prompts()) {
             self.settings_changed = true;
@@ -444,8 +450,8 @@ impl GenerationUi {
         );
         let enter = !took_enter && focused && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         y += 90.0 + crate::generation_tags::STRIP_HEIGHT + crate::generation_tags::STRIP_GAP;
-        // control layers: one row each, its picture, what it is, how strongly to follow it, and a
-        // × to stop using the layer as one
+        // control layers: one row each, its picture, what it is, how closely to follow it in four
+        // steps, and a × to stop using the layer as one
         if !self.controls.is_empty() {
             label(ui, pos2(left + 2.0, y), "CONTROL LAYERS");
             y += 22.0;
@@ -454,7 +460,7 @@ impl GenerationUi {
             for control in &controls {
                 let row = Rect::from_min_max(pos2(left, y), pos2(right, y + CONTROL_ROW));
                 ui.painter().rect_filled(row, 10.0, argb(ROW));
-                let thumb = Rect::from_min_size(pos2(row.left() + 5.0, row.center().y - 19.0), vec2(38.0, 38.0));
+                let thumb = Rect::from_min_size(pos2(row.left() + 5.0, row.top() + 5.0), vec2(38.0, 38.0));
                 ui.painter().rect_filled(thumb, 5.0, argb(FIELD));
                 if let Some(t) = self.control_pictures.get(&control.id) {
                     let shown = fit(thumb.shrink(1.0), t.size_vec2());
@@ -489,26 +495,31 @@ impl GenerationUi {
                     Weight::Regular,
                     argb(DIM),
                 );
-                let strength =
-                    self.control_strengths.entry(control.id).or_insert_with(|| default_control_strength(control.kind));
-                let percent = format!("{:.0}%", *strength * 100.0);
-                text(
-                    ui.painter(),
-                    pos2(row.right() - 52.0, row.top() + 14.0),
-                    Align2::RIGHT_CENTER,
-                    &percent,
-                    12.0,
-                    Weight::Regular,
-                    argb(DIM),
+                // how closely to follow it: Loose · Balanced · Close · Strict
+                let steps = Rect::from_min_max(
+                    pos2(thumb.right() + 10.0, row.top() + 44.0),
+                    pos2(row.right() - 38.0, row.bottom() - 6.0),
                 );
-                let track = Rect::from_min_max(
-                    pos2(row.right() - 146.0, row.center().y + 9.0),
-                    pos2(row.right() - 52.0, row.center().y + 12.0),
-                );
-                if let Some(v) = slider(ui, look, track, *strength, &format!("control strength {}", control.id)) {
-                    *strength = (v * 100.0).round() / 100.0;
+                ui.painter().rect_filled(steps, 8.0, argb(FIELD));
+                let cell_w = (steps.width() - 6.0) / STEPS.len() as f32;
+                let step = self.control_steps.entry(control.id).or_default();
+                for (i, (&value, name)) in STEPS.iter().zip(STEP_NAMES).enumerate() {
+                    let cell = Rect::from_min_max(
+                        pos2(steps.left() + 3.0 + i as f32 * cell_w, steps.top() + 3.0),
+                        pos2(steps.left() + 3.0 + (i + 1) as f32 * cell_w - 2.0, steps.bottom() - 3.0),
+                    );
+                    let on = *step == value;
+                    if on {
+                        ui.painter().rect_filled(cell, 7.0, argb(pc::ACCENT));
+                    }
+                    let ink = if on { Color32::WHITE } else { argb(DIM) };
+                    text(ui.painter(), cell.center(), Align2::CENTER_CENTER, name, 12.0, Weight::Medium, ink);
+                    if ui.interact(cell, ui.scope_id().with(("control step", control.id, i)), Sense::click()).clicked()
+                    {
+                        *step = value;
+                    }
                 }
-                let remove = Rect::from_center_size(pos2(row.right() - 22.0, row.center().y), vec2(30.0, 30.0));
+                let remove = Rect::from_center_size(pos2(row.right() - 22.0, row.top() + 19.0), vec2(30.0, 30.0));
                 text(ui.painter(), remove.center(), Align2::CENTER_CENTER, "×", 20.0, Weight::Regular, argb(DIM));
                 if ui.interact(remove, ui.scope_id().with(("control off", control.id)), Sense::click()).clicked() {
                     removed = Some(control.id);
@@ -519,6 +530,7 @@ impl GenerationUi {
                 session.set_layer_control(id, None);
                 self.controls.retain(|c| c.id != id);
                 self.control_pictures.remove(&id);
+                self.control_steps.remove(&id);
             }
             y += 4.0;
         }
@@ -663,6 +675,7 @@ impl GenerationUi {
             && self.prompt.trim().is_empty();
         let ready = self.server.connection == ServerConnection::Connected && !styles.is_empty() && !add_waiting;
         let words = match running {
+            Some(r) if r.extracting => format!("Cancel · Making {}…", extract_name(r.extract_kind)),
             Some(r) => format!("Cancel · {:.0}%", r.progress * 100.0),
             None if self.count > 1 => format!("Generate {}", self.count),
             None => "Generate".to_owned(),
@@ -698,14 +711,7 @@ impl GenerationUi {
             .controls
             .iter()
             .filter(|c| c.visible)
-            .map(|c| ControlSetting {
-                layer: c.id,
-                strength: self
-                    .control_strengths
-                    .get(&c.id)
-                    .copied()
-                    .unwrap_or_else(|| default_control_strength(c.kind)),
-            })
+            .map(|c| ControlSetting { layer: c.id, step: self.control_steps.get(&c.id).copied().unwrap_or_default() })
             .collect();
         let run = RunSettings {
             prompt: self.prompt.clone(),
@@ -1118,6 +1124,18 @@ impl GenerationUi {
                 if ui.interact(cell, ui.scope_id().with("running"), Sense::click()).clicked() {
                     self.generation.cancel();
                 }
+                if run.extracting {
+                    let words = format!("Making {}…", extract_name(run.extract_kind));
+                    text(
+                        ui.painter(),
+                        pos2(cell.right() + 10.0, cy),
+                        Align2::LEFT_CENTER,
+                        &words,
+                        12.0,
+                        Weight::Regular,
+                        argb(INK),
+                    );
+                }
             }
             // what the shown picture was made at, when the area is much larger
             if let Some(r) = self.state.shown.and_then(|id| self.state.results.iter().find(|r| r.id == id))
@@ -1243,11 +1261,11 @@ fn texture(ctx: &egui::Context, name: &str, image: &ThumbnailImage) -> TextureHa
     ctx.load_texture(name, picture, TextureOptions::LINEAR)
 }
 
-/// How strongly a control layer is followed unless its slider says otherwise.
-fn default_control_strength(kind: LayerControl) -> f32 {
+/// "line art" or "scribble", for what an extraction is making.
+fn extract_name(kind: Option<LayerControl>) -> &'static str {
     match kind {
-        LayerControl::LineArt => 0.7,
-        LayerControl::Scribble => 0.5,
+        Some(LayerControl::Scribble) => "scribble",
+        _ => "line art",
     }
 }
 

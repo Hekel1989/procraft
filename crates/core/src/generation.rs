@@ -24,9 +24,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use parking_lot::Mutex;
 use procraft_diffusion::plan::context_box;
 use procraft_diffusion::{
-    Address, Connection, Control as RequestControl, ControlKind as RequestControlKind, Feature, Picture, Request,
-    Resolution as PlanResolution, RunId, Selection as RequestSelection, SelectionMode as RequestMode, Worker,
-    largest_for_vram, plan_for,
+    Address, Connection, Control as RequestControl, ControlKind as RequestControlKind, ControlStep as RequestStep,
+    Extraction as RequestExtraction, Feature, Picture, Request, Resolution as PlanResolution, RunId,
+    Selection as RequestSelection, SelectionMode as RequestMode, Worker, largest_for_vram, plan_for,
 };
 use procraft_engine::cms::{Lut, builtin};
 use procraft_engine::document::{Document, LayerId};
@@ -41,10 +41,6 @@ use crate::{CanvasSession, ThumbnailImage};
 const THUMBNAIL_SIDE: u32 = 160;
 /// A control layer's picture in the popover is at most this big.
 const CONTROL_THUMBNAIL_SIDE: u32 = 96;
-/// How strongly a control layer is followed when the run has no strength for it: line art
-/// closely, scribbles loosely.
-const LINE_ART_STRENGTH: f32 = 0.7;
-const SCRIBBLE_STRENGTH: f32 = 0.5;
 /// The most pictures one run makes.
 const MOST_PICTURES: u32 = 4;
 /// A generated layer's name keeps this much of the prompt.
@@ -153,6 +149,7 @@ pub enum GenerationFeature {
     Refine,
     Selections,
     ControlLayers,
+    ControlFromPicture,
 }
 
 impl From<Feature> for GenerationFeature {
@@ -162,6 +159,7 @@ impl From<Feature> for GenerationFeature {
             Feature::Refine => GenerationFeature::Refine,
             Feature::Selections => GenerationFeature::Selections,
             Feature::ControlLayers => GenerationFeature::ControlLayers,
+            Feature::ControlFromPicture => GenerationFeature::ControlFromPicture,
         }
     }
 }
@@ -212,12 +210,34 @@ pub struct StyleInfo {
     pub found: bool,
 }
 
-/// A control layer's strength in a run: layer `layer` followed at `strength` (0..1, 0: not at
-/// all). A visible control layer missing from the run's list uses its kind's default.
+/// How closely a control layer is followed, from a loose shaping of the picture's start to lines
+/// held to the last step.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, uniffi::Enum)]
+pub enum ControlStep {
+    Loose,
+    #[default]
+    Balanced,
+    Close,
+    Strict,
+}
+
+impl From<ControlStep> for RequestStep {
+    fn from(step: ControlStep) -> RequestStep {
+        match step {
+            ControlStep::Loose => RequestStep::Loose,
+            ControlStep::Balanced => RequestStep::Balanced,
+            ControlStep::Close => RequestStep::Close,
+            ControlStep::Strict => RequestStep::Strict,
+        }
+    }
+}
+
+/// A control layer in a run: layer `layer` followed as closely as `step` says. A visible control
+/// layer missing from the run's list is followed at Balanced.
 #[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
 pub struct ControlSetting {
     pub layer: u64,
-    pub strength: f32,
+    pub step: ControlStep,
 }
 
 /// What to run: the prompt, a style's id, the strength (1 makes a new picture, lower refines the
@@ -235,8 +255,7 @@ pub struct RunSettings {
     /// The selection's mode; none guesses Fill or Expand from what is selected.
     #[uniffi(default = None)]
     pub mode: Option<GenerationMode>,
-    /// How strongly to follow each control layer; layers left out use their kind's default, and
-    /// a strength of 0 leaves that layer out.
+    /// How closely to follow each control layer; layers left out are followed at Balanced.
     #[uniffi(default = [])]
     pub controls: Vec<ControlSetting>,
 }
@@ -254,6 +273,12 @@ pub struct RunInfo {
     pub preview: Option<ThumbnailImage>,
     /// How many previews have come: a new number, a new preview.
     pub previews: u32,
+    /// It makes a control layer from the picture rather than a picture.
+    #[uniffi(default = false)]
+    pub extracting: bool,
+    /// The control layer it makes, when extracting.
+    #[uniffi(default = None)]
+    pub extract_kind: Option<LayerControl>,
 }
 
 /// A picture made and kept to be shown or applied.
@@ -323,6 +348,10 @@ pub struct GenerationState {
     pub shown: Option<u64>,
     /// Why the last run stopped short, if it failed.
     pub error: Option<String>,
+    /// The control layer a finished extraction added, reported once so the UIs can refresh their
+    /// layer lists.
+    #[uniffi(default = None)]
+    pub made_layer: Option<u64>,
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -434,6 +463,14 @@ struct Running {
     taken: usize,
     previews: u32,
     preview: Option<ThumbnailImage>,
+    /// A run making a control layer from the picture, rather than a picture.
+    extract: Option<Extracting>,
+}
+
+/// What an extraction run makes: the kind of control layer and the name its layer gets.
+struct Extracting {
+    kind: LayerControl,
+    name: String,
 }
 
 /// A guessed selection mode, kept until the artwork changes.
@@ -610,6 +647,11 @@ impl Generation {
             .collect()
     }
 
+    /// Whether the server can make control layers from a picture (it has the line extractors).
+    pub fn can_extract(&self) -> bool {
+        self.worker.server().ready(procraft_diffusion::Family::Anima, Feature::ControlFromPicture)
+    }
+
     /// What `resolution` makes of `session`'s area (the selection's context box when there is a
     /// selection): its target, passes and generated size.
     pub fn size_for(&self, session: &CanvasSession, resolution: GenerationResolution) -> SizeInfo {
@@ -767,7 +809,75 @@ impl Generation {
         crate::generation_tags::remember(&request.prompt);
         let name = layer_name(&request.prompt);
         let id = self.worker.submit(request);
-        artwork.running = Some(Running { id, area, mask, name, taken: 0, previews: 0, preview: None });
+        artwork.running = Some(Running { id, area, mask, name, taken: 0, previews: 0, preview: None, extract: None });
+        artwork.error = None;
+        Ok(id)
+    }
+
+    /// Starts making a control layer from the picture as it is seen: the whole canvas, or the
+    /// selection's bounds when there is one, without its control layers, through the server's
+    /// line-art or scribble extractor. The lines come back as a new layer just above the current
+    /// one ([`state`](Self::state) reports it once made); the run shows its progress like any
+    /// other. Returns the run's id.
+    pub fn control_from_picture(&self, session: &CanvasSession, kind: LayerControl) -> Result<u64, GenerationError> {
+        let server = self.worker.server();
+        if server.connection != Connection::Connected {
+            return Err(GenerationError::NotReady { reason: "not connected to a server".to_owned() });
+        }
+        let family = procraft_diffusion::Family::Anima;
+        if !server.ready(family, Feature::ControlFromPicture) {
+            let missing: Vec<String> = server
+                .readiness
+                .iter()
+                .find(|(f, _)| *f == family)
+                .map(|(_, r)| r.missing(Feature::ControlFromPicture).iter().map(ToString::to_string).collect())
+                .unwrap_or_default();
+            let reason = if missing.iter().any(|m| m.contains("comfyui_controlnet_aux")) {
+                "needs comfyui_controlnet_aux".to_owned()
+            } else {
+                format!("the server isn't ready to {}", Feature::ControlFromPicture.label())
+            };
+            return Err(GenerationError::NotReady { reason });
+        }
+        let mut artwork = self.artwork_of(session);
+        if artwork.loading {
+            return Err(GenerationError::NotReady { reason: "the artwork's results are still loading".to_owned() });
+        }
+        if artwork.running.is_some() {
+            return Err(GenerationError::NotReady { reason: "a run is going".to_owned() });
+        }
+        // the visible picture, control layers left out, over the whole canvas or the selection's
+        // bounds (not the context box: the lines are wanted exactly where they were drawn)
+        let selected = current_selection(session);
+        let area = match &selected {
+            Some(selected) => {
+                let [x, y, width, height] = selected.bounds;
+                IRect::new(
+                    i32::try_from(x).unwrap_or(i32::MAX),
+                    i32::try_from(y).unwrap_or(i32::MAX),
+                    i32::try_from(x.saturating_add(width)).unwrap_or(i32::MAX),
+                    i32::try_from(y.saturating_add(height)).unwrap_or(i32::MAX),
+                )
+            }
+            None => {
+                let state = session.shared.lock_finished();
+                IRect::from_size(state.doc.width(), state.doc.height())
+            }
+        };
+        let mask = selected.as_ref().map(|selected| crate::layer_ops::mask_part(&selected.mask, area));
+        let picture = session.extraction_picture(area)?;
+        let id =
+            self.worker.extract(RequestExtraction { kind: kind.into(), picture, size: (area.width(), area.height()) });
+        artwork.running = Some(Running {
+            id,
+            area,
+            mask,
+            name: control_layer_name(kind).to_owned(),
+            taken: 0,
+            previews: 0,
+            preview: None,
+            extract: Some(Extracting { kind, name: control_layer_name(kind).to_owned() }),
+        });
         artwork.error = None;
         Ok(id)
     }
@@ -789,6 +899,7 @@ impl Generation {
         self.ensure_loading(artwork);
         let mut running = None;
         let made = self.take_made(artwork);
+        let mut made_layer = None;
         if let Some(r) = &mut artwork.running
             && let Some(run) = self.worker.run(r.id)
         {
@@ -798,6 +909,15 @@ impl Generation {
             }
             if run.finished {
                 artwork.error = run.error.filter(|e| *e != procraft_diffusion::Error::Cancelled).map(|e| e.to_string());
+                if let Some(extract) = &r.extract
+                    && artwork.error.is_none()
+                    && let Some(result) = run.results.first()
+                {
+                    match add_extracted(artwork.shared.as_ref(), r.area, r.mask.as_deref(), extract, &result.picture) {
+                        Ok(id) => made_layer = Some(id),
+                        Err(reason) => artwork.error = Some(reason),
+                    }
+                }
                 self.worker.forget(r.id);
             } else {
                 running = Some(RunInfo {
@@ -807,6 +927,8 @@ impl Generation {
                     progress: run.progress,
                     preview: r.preview.clone(),
                     previews: r.previews,
+                    extracting: r.extract.is_some(),
+                    extract_kind: r.extract.as_ref().map(|e| e.kind),
                 });
             }
         }
@@ -848,6 +970,7 @@ impl Generation {
                 })
                 .collect(),
             shown: artwork.shown,
+            made_layer,
             error: artwork.error.clone(),
         }
     }
@@ -1105,6 +1228,10 @@ impl Generation {
         if let Some(r) = &mut artwork.running
             && let Some(run) = self.worker.run(r.id)
         {
+            // an extraction's picture becomes a layer, not a result in the bar
+            if r.extract.is_some() {
+                return false;
+            }
             for result in run.results.iter().skip(r.taken) {
                 artwork.next = artwork.next.saturating_add(1);
                 if let Some(kept) = keep(artwork.next, result, r, artwork.from_srgb.as_ref()) {
@@ -1451,15 +1578,8 @@ fn selection_bounds(session: &CanvasSession) -> Option<([u32; 4], (u32, u32))> {
     Some((bounds, (state.doc.width(), state.doc.height())))
 }
 
-fn default_control_strength(kind: LayerControl) -> f32 {
-    match kind {
-        LayerControl::LineArt => LINE_ART_STRENGTH,
-        LayerControl::Scribble => SCRIBBLE_STRENGTH,
-    }
-}
-
-/// The visible control layers' pictures over `area`, each with its strength: from `settings` by
-/// layer, else its kind's default; a strength of 0 leaves that layer out.
+/// The visible control layers' pictures over `area`, each followed as closely as its setting says
+/// (Balanced when the run has none for it).
 fn run_controls(
     session: &CanvasSession,
     settings: &[ControlSetting],
@@ -1471,16 +1591,62 @@ fn run_controls(
     };
     let mut controls = Vec::new();
     for (id, kind) in layers {
-        let default = default_control_strength(kind);
-        let strength = settings.iter().find(|s| s.layer == id.0).map_or(default, |s| s.strength);
-        let strength = if strength.is_finite() { strength.clamp(0.0, 1.0) } else { default };
-        if strength <= 0.0 {
-            continue;
-        }
+        let step = settings.iter().find(|s| s.layer == id.0).map_or_else(ControlStep::default, |s| s.step);
+        let (strength, end_percent) = procraft_diffusion::Family::Anima.control_settings(step.into());
         let picture = session.control_picture(id, area)?;
-        controls.push(RequestControl { kind: kind.into(), strength, picture });
+        controls.push(RequestControl { kind: kind.into(), strength, end_percent, picture });
     }
     Ok(controls)
+}
+
+/// The name an extracted control layer gets.
+fn control_layer_name(kind: LayerControl) -> &'static str {
+    match kind {
+        LayerControl::LineArt => "Line art (from picture)",
+        LayerControl::Scribble => "Scribble (from picture)",
+    }
+}
+
+/// `picture` scaled down to the family's most megapixels, its shape kept, if it is bigger.
+fn scaled_to_cap(picture: Picture) -> Picture {
+    let most = f64::from(procraft_diffusion::Family::Anima.most_megapixels()) * 1_000_000.0;
+    let pixels = f64::from(picture.width) * f64::from(picture.height);
+    if pixels <= most {
+        return picture;
+    }
+    let scale = (most / pixels).sqrt();
+    let width = (f64::from(picture.width) * scale).round().max(1.0) as u32;
+    let height = (f64::from(picture.height) * scale).round().max(1.0) as u32;
+    picture.resized(width, height).unwrap_or(picture)
+}
+
+/// An extraction's lines as a layer's pixels (premultiplied black, their luminance as alpha),
+/// masked by the selection when there was one.
+fn extracted_pixels(lines: &Picture, mask: Option<&[u8]>) -> Vec<u8> {
+    let mut pixels = lines.lines_alpha();
+    if let Some(mask) = mask {
+        for (px, &value) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(mask) {
+            let alpha = u16::from(px[3]);
+            px[3] = ((alpha * u16::from(value) + 127) / 255) as u8;
+        }
+    }
+    pixels
+}
+
+/// Adds an extraction run's lines to the canvas as a new control layer above the current one;
+/// its id, or why it couldn't.
+fn add_extracted(
+    shared: Option<&std::sync::Weak<crate::Shared>>,
+    area: IRect,
+    mask: Option<&[u8]>,
+    extract: &Extracting,
+    lines: &Picture,
+) -> Result<u64, String> {
+    let shared = shared.and_then(std::sync::Weak::upgrade).ok_or_else(|| "the canvas is closed".to_owned())?;
+    let pixels = extracted_pixels(lines, mask);
+    CanvasSession { shared }
+        .add_control_from_picture(area, &pixels, &extract.name, extract.kind)
+        .ok_or_else(|| "No room for another layer".to_owned())
 }
 
 /// Whether a selection is mostly transparent pixels at the canvas edge (then Expand), else Fill.
@@ -1654,6 +1820,42 @@ impl CanvasSession {
         Picture::control(area.width(), area.height(), &pixels).map_err(|e| unreadable(e.to_string()))
     }
 
+    /// The picture for a control layer from the picture: `area`'s part of the canvas without its
+    /// control layers, in sRGB and flattened onto white, at its own size up to the family's most.
+    fn extraction_picture(&self, area: IRect) -> Result<Picture, GenerationError> {
+        let canvas = self.picture_for_generation(true)?;
+        let Some(picture) = canvas.picture else {
+            return Err(GenerationError::Canvas { reason: "the canvas isn't drawn yet".to_owned() });
+        };
+        let (x, y) = (u32::try_from(area.x0).unwrap_or(0), u32::try_from(area.y0).unwrap_or(0));
+        let cropped = picture
+            .cropped(x, y, area.width(), area.height())
+            .map_err(|e| GenerationError::Canvas { reason: e.to_string() })?;
+        Ok(scaled_to_cap(cropped.flattened([255, 255, 255])))
+    }
+
+    /// A new layer just above the current one holding `pixels` (premultiplied, `area`'s size) at
+    /// `area`, named `name` and a control layer of `kind`, as one undo step; its id.
+    fn add_control_from_picture(&self, area: IRect, pixels: &[u8], name: &str, kind: LayerControl) -> Option<u64> {
+        let id = self.change("control layer from picture", |d| {
+            if !d.has_room(1) || area.intersect(IRect::from_size(d.width(), d.height())) != area {
+                return None;
+            }
+            let id = d.add_layer();
+            d.rename(id, name);
+            d.set_control(id, Some(kind.into()));
+            Some(id.0)
+        })?;
+        let mut guard = self.shared.lock();
+        let st = &mut *guard;
+        if let (Some(canvas), Some(gpu)) = (st.canvas.as_mut(), st.gpu.as_ref()) {
+            canvas.upload_layer_part(gpu, LayerId(id), area, pixels).ok()?;
+        }
+        st.revision += 1;
+        self.shared.frame(st);
+        Some(id)
+    }
+
     /// Shows `overlay` (an area and its premultiplied pixels) over the canvas, or nothing.
     fn set_overlay(&self, overlay: Option<(IRect, &[u8])>) {
         let mut guard = self.shared.lock();
@@ -1734,21 +1936,68 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!((listed[0].id, listed[0].kind, listed[0].visible), (id, LayerControl::LineArt, true));
         assert!(listed[0].thumbnail.width > 0 && listed[0].thumbnail.height > 0);
-        // hidden, it is ignored by a run; shown, its default strength is used
+        // hidden, it is ignored by a run; shown, it is followed at Balanced by default
         assert!(s.set_layer_visible(id, false));
         assert!(!generation.control_layers(&s)[0].visible);
         assert!(run_controls(&s, &[], IRect::from_size(32, 32)).unwrap().is_empty());
         assert!(s.set_layer_visible(id, true));
         let defaults = run_controls(&s, &[], IRect::from_size(32, 32)).unwrap();
-        assert_eq!((defaults.len(), defaults[0].strength), (1, LINE_ART_STRENGTH));
-        // a strength of 0 leaves it out; a setting replaces the default
-        let none = [ControlSetting { layer: id, strength: 0.0 }];
-        assert!(run_controls(&s, &none, IRect::from_size(32, 32)).unwrap().is_empty());
-        let stronger = [ControlSetting { layer: id, strength: 0.9 }];
-        assert_eq!(run_controls(&s, &stronger, IRect::from_size(32, 32)).unwrap()[0].strength, 0.9);
+        assert_eq!((defaults.len(), defaults[0].strength, defaults[0].end_percent), (1, 0.6, 0.6));
+        // a setting replaces the default
+        let close = [ControlSetting { layer: id, step: ControlStep::Close }];
+        let close = run_controls(&s, &close, IRect::from_size(32, 32)).unwrap();
+        assert_eq!((close[0].strength, close[0].end_percent), (0.7, 0.8));
+        let strict = [ControlSetting { layer: id, step: ControlStep::Strict }];
+        let strict = run_controls(&s, &strict, IRect::from_size(32, 32)).unwrap();
+        assert_eq!((strict[0].strength, strict[0].end_percent), (1.0, 1.0));
         // turned off, it is not listed or used
         assert!(s.set_layer_control(id, None));
         assert!(generation.control_layers(&s).is_empty());
+    }
+
+    #[test]
+    fn extracted_lines_are_black_with_their_luminance_as_alpha() {
+        let lines = Picture::new(4, 1, vec![255; 16]).unwrap();
+        assert_eq!(extracted_pixels(&lines, None), [0u8, 0, 0, 255].repeat(4));
+        // the selection masks the lines' alpha
+        let masked = extracted_pixels(&lines, Some(&[0, 255, 128, 0]));
+        assert_eq!(masked, vec![0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 128, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn an_extracted_control_layer_lands_above_the_current_one_and_undo_takes_it_away() {
+        let Some(s) = session(64) else { return };
+        // a layer below and one above, the lower current: the lines go between them
+        let lower = s.shared.lock().doc.current();
+        let above = s.change("layer", |d| Some(d.add_layer())).unwrap();
+        s.change("current", |d| d.set_current(lower).then_some(()));
+        let lines = Picture::new(2, 2, vec![255; 16]).unwrap();
+        let pixels = extracted_pixels(&lines, None);
+        let id = s
+            .add_control_from_picture(
+                IRect::from_size(2, 2),
+                &pixels,
+                control_layer_name(LayerControl::LineArt),
+                LayerControl::LineArt,
+            )
+            .unwrap();
+        {
+            let st = s.shared.lock();
+            let members = st.doc.members(None);
+            let at = members.iter().position(|m| *m == lower).map(|i| i + 1);
+            assert_eq!(members.iter().position(|m| m.0 == id), at, "just above the current one");
+            let layer = st.doc.layer(LayerId(id)).unwrap();
+            assert_eq!(layer.name, "Line art (from picture)");
+            assert_eq!(
+                layer.control,
+                Some(procraft_engine::document::Control { kind: procraft_engine::document::ControlKind::LineArt })
+            );
+        }
+        assert_eq!(at(&composite(&s), 64, 0, 0), [0, 0, 0, 255], "black lines on the canvas");
+        s.undo();
+        assert!(s.shared.lock().doc.layer(LayerId(id)).is_none(), "one undo takes it away");
+        assert!(s.shared.lock().doc.layer(above).is_some(), "and nothing else");
+        assert_eq!(control_layer_name(LayerControl::Scribble), "Scribble (from picture)");
     }
 
     #[test]
@@ -1903,6 +2152,7 @@ mod tests {
             taken: 0,
             previews: 0,
             preview: None,
+            extract: None,
         };
         let picture = Picture::new(width, height, [255u8, 0, 0, 255].repeat((width * height) as usize)).unwrap();
         let result = procraft_diffusion::RunResult { seed: 1, picture, generated: (width, height) };

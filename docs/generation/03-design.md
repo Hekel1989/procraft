@@ -160,7 +160,7 @@ ProCraft's margins:
 - **Making one**: the layer's options menu has a row **"Control layer"** (beside Reference and
   Drawing Assist) opening a small menu: **None** · **Line art** · **Scribble** ·
   **Line art from picture** · **Scribble from picture**.
-  - Line art: clean lines, followed closely. Scribble: rough strokes, followed loosely.
+  - Line art: clean lines. Scribble: rough strokes.
   - **…from picture** *(decided 2026-11-05, brought forward from Phase 2)*: what's visible (the
     whole canvas, or inside the selection when there is one; control layers left out) goes to the
     server's extractor, and the lines come back as a **new layer** just above the current one —
@@ -172,6 +172,11 @@ ProCraft's margins:
     `Scribble_PiDiNet_Preprocessor` — the first choice, kept if they look right on real pictures.
     Needs the add-on, checked like the others (§B12); without it the two rows are disabled with
     "needs comfyui_controlnet_aux".
+    *As built (2026-11-05):* the picture goes at its own size up to 3 MP, and the extractors are
+    asked for the shorter side rounded to 64 between 512 and 2048; the lines come back at the
+    selected bounds' (or canvas's) size, their luminance becoming the new layer's alpha. The run
+    reports `extracting` (and its kind) in its state, and the layer's id once through
+    `made_layer`.
 - **In the Layers panel**: Android names it under the layer's name, the way ProCraft marks a
   Reference layer ("Line art control" / "Scribble control"); desktop shows a small badge left of
   the blend letter. Otherwise it's a normal layer: painted, hidden, moved as usual.
@@ -180,7 +185,9 @@ ProCraft's margins:
   **Balanced** is the default for both kinds *(decided 2026-11-05; replaces the 0–100 % slider)*.
   Each step is a pair (strength, the share of the steps the control is applied for), as constants
   in `family/anima.rs`, tuned on the dev server: Loose only shapes the start so the model can
-  drift; Strict holds the lines to the end.
+  drift; Strict holds the lines to the end. *As built:* Loose 0.5 to 0.4, Balanced 0.6 to 0.6,
+  Close 0.7 to 0.8, Strict 1.0 to 1.0, the same for line art and scribble; each layer's step is
+  remembered while the app runs.
 - **What is sent**: the control layer's own pixels (not the picture). Control layers are **left out
   of the picture** that is sent for refine and selections, so their lines don't get painted in as
   colour. Hidden control layers are ignored.
@@ -201,7 +208,7 @@ Image generation** that opens the popover on it. Its content:
   assumed if none), and **Connect**.
 - **Status** — once connected, read-only lines with ✓ / ✕:
   - ComfyUI version
-  - Add-ons: tooling nodes, inpaint nodes (controlnet_aux shown, not needed in Phase 1)
+  - Add-ons: tooling nodes, inpaint nodes, controlnet_aux (for control layers from a picture)
   - Models: Anima checkpoint(s), text encoder, VAE, inpaint control, line-art control
   - What works: Generate · Refine · Selections · Control layers — each ✓ or "needs <file> in
     <folder>".
@@ -277,6 +284,7 @@ indexing), `unsafe` denied, prose doc comments, semantic commits.
 | `styles.rs` + `styles/*.json` | `Style` and the built-in Anima styles (§B9). |
 | `tags.rs` + `tags/*.csv` | The tag index and search (§B11). |
 | `requirements.rs` | Required add-ons, model patterns per family and feature, pinned versions: the single list both the app and the companion use (§B12). |
+| `extract.rs` | The family-free graph for a control layer from a picture: a line extractor, white lines back on black. |
 | `picture.rs` | RGBA helpers: unpremultiply, crop, scale (Lanczos via `image`), PNG in/out, masks, line-art preparation. |
 | `error.rs` | `Error` with the cases of §A8. |
 
@@ -297,7 +305,10 @@ As built in M2 (`crates/core/src/generation.rs`): `Generation::new(settings)`, `
 `apply_result(session, id) -> Option<layer>`, `discard_results(session)`, `leave(session)`,
 `set_folder(session, folder)` (the artwork's folder, for results kept with it) and
 `generation_address(text)`. M3 adds `selection(session) -> Option<SelectionInfo>`, the context box
-and guessed mode the Form's Selection row uses. The sketch below was the plan.
+and guessed mode the Form's Selection row uses. Control layers add `control_layers`,
+`set_layer_control`, `control_from_picture(session, kind)` and `can_extract()`; a run's
+`ControlSetting` is `{ layer, step }`, and `RunInfo` / `GenerationState` carry `extracting`,
+`extract_kind` and `made_layer`. The sketch below was the plan.
 
 ```rust
 // app-wide
@@ -323,7 +334,6 @@ impl CanvasSession {
     pub fn apply_result(&self, result: u64) -> Option<u64>; // new layer id
     pub fn discard_results(&self);
     pub fn set_control_layer(&self, layer: u64, control: Option<ControlKind>);
-    pub fn set_control_strength(&self, layer: u64, strength: f32);
     pub fn control_layers(&self) -> Vec<ControlLayerInfo>;
     pub fn selection_mode_guess(&self) -> SelectionMode;
 }
@@ -451,11 +461,17 @@ turned to white lines on black (what the control models expect), cropped and sca
 picture. Exact settings (grow, blur, control strengths for Anima) are tuned in M3/M4 against the
 dev server and kept as constants in `family/anima.rs`.
 
-*As built (M4):* each control is its own `ETN_control_load`/`ETN_control_apply` pair, chained on the
-model before sampling (and before the inpaint control for selections), with no mask and
-`start_percent` 0: `end_percent` 1.0 for line art, 0.8 for scribble. Strengths come from the run
-(70 % line art, 50 % scribble unless the popover says otherwise); a control image is sent at each
-pass's size, so both passes of a two-pass picture follow it.
+*As built (M4, extended 2026-11-05):* each control is its own `ETN_control_load`/`ETN_control_apply`
+pair, chained on the model before sampling (and before the inpaint control for selections), with no
+mask and `start_percent` 0. Its strength and how far through sampling it applies are the run's step,
+from constants in `family/anima.rs`: Loose 0.5 to 0.4, Balanced 0.6 to 0.6, Close 0.7 to 0.8,
+Strict 1.0 to 1.0 (strength, end_percent), the same for line art and scribble; Balanced is the
+default. A control image is sent at each pass's size, so both passes of a two-pass picture follow
+it. A control layer from a picture goes through its own family-free graph
+(`crates/diffusion/src/extract.rs`): `ETN_LoadImageBase64` → `AnimeLineArtPreprocessor`, or
+`Scribble_PiDiNet_Preprocessor` with `safe` on, at the shorter side rounded to 64 between 512 and
+2048 → `ETN_SendImageWebSocket` PNG; the picture is sent at its own size up to 3 MP and its lines
+are scaled back to the selected bounds.
 
 ## B7. Sizes: the resolution planner
 
@@ -559,9 +575,9 @@ A style (`styles/anima.json`, our own file):
 - **Control layer**: `Layer.control: Option<{ kind }>` in the engine's document,
   `#[serde(default, skip_serializing_if = "Option::is_none")]`. Old artworks load unchanged; an
   artwork with control layers opened in upstream ProCraft just ignores the field. *(As built: the
-  kind only. Strength belongs to the run (`RunSettings.controls`), not the artwork, so the same
-  layer can be followed differently each time; a visible layer missing from the run's list uses
-  70 % for line art and 50 % for scribble.)*
+  kind only. The step belongs to the run (`RunSettings.controls`) and is remembered while the app
+  runs, not with the artwork; a visible layer missing from the run's list is followed at
+  Balanced.)*
 - **Results** (brought forward from Phase 2): kept in the artwork's folder, in a private
   `generation/` subfolder that no export reads. `index.json` lists every result in order (its id,
   seed, name, area, scaled_from and thumbnail size), `<id>.png` holds its pixels losslessly
@@ -606,6 +622,7 @@ A style (`styles/anima.json`, our own file):
 | `comfyui-tooling-nodes` | everything (image in/out) | `ETN_LoadImageBase64`, `ETN_SendImageWebSocket` present |
 | ″ | control layers, selections | `ETN_control_load`, `ETN_control_apply` present |
 | `comfyui-inpaint-nodes` | selections | `INPAINT_ExpandMask`, `INPAINT_MaskedFill`, `INPAINT_ColorMatch` present |
+| `comfyui_controlnet_aux` | control layers from a picture | `AnimeLineArtPreprocessor`, `Scribble_PiDiNet_Preprocessor` present |
 | Anima checkpoint | everything | a `UNETLoader` choice matching `*anima*` |
 | `qwen_3_06b*` text encoder | everything | `CLIPLoader` choice |
 | `qwen_image_vae*` | everything | `VAELoader` choice |

@@ -16,10 +16,13 @@ pub enum Feature {
     Selections,
     /// Generating guided by control layers.
     ControlLayers,
+    /// Making a control layer from a picture, with the server's line extractor.
+    ControlFromPicture,
 }
 
 impl Feature {
-    pub const ALL: [Feature; 4] = [Feature::Generate, Feature::Refine, Feature::Selections, Feature::ControlLayers];
+    pub const ALL: [Feature; 5] =
+        [Feature::Generate, Feature::Refine, Feature::Selections, Feature::ControlLayers, Feature::ControlFromPicture];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -27,6 +30,7 @@ impl Feature {
             Feature::Refine => "Refine",
             Feature::Selections => "Selections",
             Feature::ControlLayers => "Control layers",
+            Feature::ControlFromPicture => "Control layers from a picture",
         }
     }
 
@@ -48,13 +52,19 @@ impl Feature {
             Feature::ControlLayers => {
                 &["ETN_SendImageWebSocket", "ETN_LoadImageBase64", "ETN_control_load", "ETN_control_apply"]
             }
+            Feature::ControlFromPicture => &[
+                "ETN_SendImageWebSocket",
+                "ETN_LoadImageBase64",
+                "AnimeLineArtPreprocessor",
+                "Scribble_PiDiNet_Preprocessor",
+            ],
         }
     }
 
     /// The kinds of model file it needs, beyond the family's checkpoint, text encoder and VAE.
     pub(crate) fn models(self) -> &'static [ModelKind] {
         match self {
-            Feature::Generate | Feature::Refine => &[],
+            Feature::Generate | Feature::Refine | Feature::ControlFromPicture => &[],
             Feature::Selections => &[ModelKind::InpaintControl],
             Feature::ControlLayers => &[ModelKind::LineControl],
         }
@@ -71,7 +81,13 @@ pub fn all_nodes() -> Vec<&'static str> {
 
 /// The add-on a node comes from, by its name's prefix.
 pub fn add_on(node: &str) -> &'static str {
-    if node.starts_with("INPAINT_") { "comfyui-inpaint-nodes" } else { "comfyui-tooling-nodes" }
+    if node.starts_with("INPAINT_") {
+        "comfyui-inpaint-nodes"
+    } else if node == "AnimeLineArtPreprocessor" || node == "Scribble_PiDiNet_Preprocessor" {
+        "comfyui_controlnet_aux"
+    } else {
+        "comfyui-tooling-nodes"
+    }
 }
 
 /// Something a server lacks.
@@ -173,5 +189,22 @@ mod tests {
     fn nothing_without_the_tooling_add_on() {
         let r = Readiness::check(Family::Anima, &server(&[], &[]));
         assert_eq!(r.missing(Feature::Generate), &[Missing::AddOn("comfyui-tooling-nodes")]);
+    }
+
+    #[test]
+    fn the_extractors_come_from_the_controlnet_aux_add_on() {
+        assert_eq!(add_on("AnimeLineArtPreprocessor"), "comfyui_controlnet_aux");
+        assert_eq!(add_on("Scribble_PiDiNet_Preprocessor"), "comfyui_controlnet_aux");
+        // the tooling nodes are there, the extractors aren't
+        let models = server(
+            &["ETN_SendImageWebSocket", "ETN_LoadImageBase64", "ETN_control_load", "ETN_control_apply"],
+            &["anima-lllite-inpainting-v2.safetensors", "anima-lllite-any-test-like-v2.safetensors"],
+        );
+        let r = Readiness::check(Family::Anima, &models);
+        assert!(!r.ready(Feature::ControlFromPicture));
+        assert_eq!(r.missing(Feature::ControlFromPicture), &[Missing::AddOn("comfyui_controlnet_aux")]);
+        // with them it is
+        let models = server(&all_nodes(), &[]);
+        assert!(Readiness::check(Family::Anima, &models).ready(Feature::ControlFromPicture));
     }
 }
