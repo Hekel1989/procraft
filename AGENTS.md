@@ -149,8 +149,9 @@ Package `io.github.hekel1989.procraftdiffusion.debug` (the old ProCraft debug ap
 
 - **Done:** M1 (foundations, CLI), M2 (Generate on the tablet and desktop), M3 (generation
   resolution Draft/Normal/Quality, selections Fill/Add/Remove/Expand, Selection-toolbar button),
-  M4 (control layers Line art/Scribble with four steps Loose/Balanced/Close/Strict, made from
-  what's visible too; tag autocomplete with exact, prefix, then alias matches).
+  M4 (control layers Line art/Scribble with four steps Loose/Balanced/Close/Strict, added from
+  the popover's Control part and traced from what's visible with each row's trace button, as in
+  Krita; tag autocomplete with exact, prefix, then alias matches).
 - **Next:** M5 (the companion CLI).
 - **After Phase 1:** style editing.
 - **Since M3:** results are kept with their artwork in its private `generation/` folder (the

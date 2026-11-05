@@ -273,12 +273,15 @@ pub struct RunInfo {
     pub preview: Option<ThumbnailImage>,
     /// How many previews have come: a new number, a new preview.
     pub previews: u32,
-    /// It makes a control layer from the picture rather than a picture.
+    /// It traces the picture into a control layer rather than making a picture.
     #[uniffi(default = false)]
     pub extracting: bool,
-    /// The control layer it makes, when extracting.
+    /// The kind of lines it traces, when tracing.
     #[uniffi(default = None)]
     pub extract_kind: Option<LayerControl>,
+    /// The control layer it traces into, when tracing.
+    #[uniffi(default = None)]
+    pub extract_layer: Option<u64>,
 }
 
 /// A picture made and kept to be shown or applied.
@@ -348,7 +351,7 @@ pub struct GenerationState {
     pub shown: Option<u64>,
     /// Why the last run stopped short, if it failed.
     pub error: Option<String>,
-    /// The control layer a finished extraction added, reported once so the UIs can refresh their
+    /// The control layer a finished trace drew into, reported once so the UIs can refresh their
     /// layer lists.
     #[uniffi(default = None)]
     pub made_layer: Option<u64>,
@@ -463,14 +466,14 @@ struct Running {
     taken: usize,
     previews: u32,
     preview: Option<ThumbnailImage>,
-    /// A run making a control layer from the picture, rather than a picture.
+    /// A run tracing the picture into a control layer, rather than making a picture.
     extract: Option<Extracting>,
 }
 
-/// What an extraction run makes: the kind of control layer and the name its layer gets.
+/// What a trace run makes: the kind of lines, and the control layer they go into.
 struct Extracting {
     kind: LayerControl,
-    name: String,
+    layer: LayerId,
 }
 
 /// A guessed selection mode, kept until the artwork changes.
@@ -647,7 +650,7 @@ impl Generation {
             .collect()
     }
 
-    /// Whether the server can make control layers from a picture (it has the line extractors).
+    /// Whether the server can trace the picture into control layers (it has the line extractors).
     pub fn can_extract(&self) -> bool {
         self.worker.server().ready(procraft_diffusion::Family::Anima, Feature::ControlFromPicture)
     }
@@ -814,12 +817,22 @@ impl Generation {
         Ok(id)
     }
 
-    /// Starts making a control layer from the picture as it is seen: the whole canvas, or the
-    /// selection's bounds when there is one, without its control layers, through the server's
-    /// line-art or scribble extractor. The lines come back as a new layer just above the current
-    /// one ([`state`](Self::state) reports it once made); the run shows its progress like any
-    /// other. Returns the run's id.
-    pub fn control_from_picture(&self, session: &CanvasSession, kind: LayerControl) -> Result<u64, GenerationError> {
+    /// Starts tracing the picture as it is seen into control layer `layer`, through the server's
+    /// line-art or scribble extractor (the layer's kind): the whole canvas, or the selection when
+    /// there is one, without the control layers. The lines replace what the layer had there, as
+    /// one undo step, once the run ends ([`state`](Self::state) reports the layer then); the run
+    /// shows its progress like any other. Returns the run's id.
+    pub fn trace_control(&self, session: &CanvasSession, layer: u64) -> Result<u64, GenerationError> {
+        let layer = LayerId(layer);
+        let kind: LayerControl = {
+            let st = session.shared.lock();
+            match st.doc.layer(layer).and_then(|l| l.control) {
+                Some(control) => control.kind.into(),
+                None => {
+                    return Err(GenerationError::NotReady { reason: "that layer isn't a control layer".to_owned() });
+                }
+            }
+        };
         let server = self.worker.server();
         if server.connection != Connection::Connected {
             return Err(GenerationError::NotReady { reason: "not connected to a server".to_owned() });
@@ -872,11 +885,11 @@ impl Generation {
             id,
             area,
             mask,
-            name: control_layer_name(kind).to_owned(),
+            name: String::new(),
             taken: 0,
             previews: 0,
             preview: None,
-            extract: Some(Extracting { kind, name: control_layer_name(kind).to_owned() }),
+            extract: Some(Extracting { kind, layer }),
         });
         artwork.error = None;
         Ok(id)
@@ -913,7 +926,7 @@ impl Generation {
                     && artwork.error.is_none()
                     && let Some(result) = run.results.first()
                 {
-                    match add_extracted(artwork.shared.as_ref(), r.area, r.mask.as_deref(), extract, &result.picture) {
+                    match trace_into(artwork.shared.as_ref(), r.area, r.mask.as_deref(), extract, &result.picture) {
                         Ok(id) => made_layer = Some(id),
                         Err(reason) => artwork.error = Some(reason),
                     }
@@ -929,6 +942,7 @@ impl Generation {
                     previews: r.previews,
                     extracting: r.extract.is_some(),
                     extract_kind: r.extract.as_ref().map(|e| e.kind),
+                    extract_layer: r.extract.as_ref().map(|e| e.layer.0),
                 });
             }
         }
@@ -1580,7 +1594,8 @@ fn selection_bounds(session: &CanvasSession) -> Option<([u32; 4], (u32, u32))> {
 }
 
 /// The visible control layers' pictures over `area`, each followed as closely as its setting says
-/// (Balanced when the run has none for it).
+/// (Balanced when the run has none for it). A layer with nothing drawn in `area` is left out: a
+/// blank guide would only steer the picture towards empty space.
 fn run_controls(
     session: &CanvasSession,
     settings: &[ControlSetting],
@@ -1594,18 +1609,10 @@ fn run_controls(
     for (id, kind) in layers {
         let step = settings.iter().find(|s| s.layer == id.0).map_or_else(ControlStep::default, |s| s.step);
         let (strength, end_percent) = procraft_diffusion::Family::Anima.control_settings(step.into());
-        let picture = session.control_picture(id, area)?;
+        let Some(picture) = session.control_picture(id, area)? else { continue };
         controls.push(RequestControl { kind: kind.into(), strength, end_percent, picture });
     }
     Ok(controls)
-}
-
-/// The name an extracted control layer gets.
-fn control_layer_name(kind: LayerControl) -> &'static str {
-    match kind {
-        LayerControl::LineArt => "Line art (from picture)",
-        LayerControl::Scribble => "Scribble (from picture)",
-    }
 }
 
 /// `picture` scaled down to the family's most megapixels, its shape kept, if it is bigger.
@@ -1621,22 +1628,10 @@ fn scaled_to_cap(picture: Picture) -> Picture {
     picture.resized(width, height).unwrap_or(picture)
 }
 
-/// An extraction's lines as a layer's pixels (premultiplied black, their luminance as alpha),
-/// masked by the selection when there was one.
-fn extracted_pixels(lines: &Picture, mask: Option<&[u8]>) -> Vec<u8> {
-    let mut pixels = lines.lines_alpha();
-    if let Some(mask) = mask {
-        for (px, &value) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(mask) {
-            let alpha = u16::from(px[3]);
-            px[3] = ((alpha * u16::from(value) + 127) / 255) as u8;
-        }
-    }
-    pixels
-}
-
-/// Adds an extraction run's lines to the canvas as a new control layer above the current one;
-/// its id, or why it couldn't.
-fn add_extracted(
+/// Puts a trace run's lines into its control layer over `area` (within the selection's `mask`
+/// when there was one), replacing what the layer had there, as one undo step; the layer's id, or
+/// why it couldn't.
+fn trace_into(
     shared: Option<&std::sync::Weak<crate::Shared>>,
     area: IRect,
     mask: Option<&[u8]>,
@@ -1644,11 +1639,10 @@ fn add_extracted(
     lines: &Picture,
 ) -> Result<u64, String> {
     let shared = shared.and_then(std::sync::Weak::upgrade).ok_or_else(|| "the canvas is closed".to_owned())?;
-    let pixels = extracted_pixels(lines, mask);
     // on the artwork's shared state itself: a CanvasSession made here would detach the window
     // when dropped, and the canvas would stop drawing
-    add_control_from_picture(&shared, area, &pixels, &extract.name, extract.kind)
-        .ok_or_else(|| "No room for another layer".to_owned())
+    replace_control_pixels(&shared, extract.layer, area, lines.lines_alpha(), mask)
+        .ok_or_else(|| "The control layer is gone".to_owned())
 }
 
 /// Shows `overlay` (an area and its premultiplied pixels) over `shared`'s canvas, or nothing.
@@ -1665,35 +1659,44 @@ fn set_overlay(shared: &crate::Shared, overlay: Option<(IRect, &[u8])>) {
     shared.frame(st);
 }
 
-/// A new control layer of `kind` named `name`, just above the current layer, holding `pixels`
-/// (premultiplied, `area`'s size) at `area`, as one undo step; its id.
-fn add_control_from_picture(
+/// Replaces control layer `layer`'s pixels over `area` with `lines` (premultiplied, `area`'s
+/// size), within `mask` when there is one (outside it the layer keeps its own), as one undo step
+/// named "trace control layer"; the layer's id, or none when it is gone or isn't a control layer.
+fn replace_control_pixels(
     shared: &crate::Shared,
+    layer: LayerId,
     area: IRect,
-    pixels: &[u8],
-    name: &str,
-    kind: LayerControl,
+    mut lines: Vec<u8>,
+    mask: Option<&[u8]>,
 ) -> Option<u64> {
-    let mut guard = shared.lock();
+    let mut guard = shared.lock_finished();
     let st = &mut *guard;
     st.finish_stroke();
     st.settle();
-    let before = st.doc.clone();
-    let d = &mut st.doc;
-    if !d.has_room(1) || area.intersect(IRect::from_size(d.width(), d.height())) != area {
+    st.flush();
+    if st.doc.layer(layer).and_then(|l| l.control).is_none()
+        || area.intersect(IRect::from_size(st.doc.width(), st.doc.height())) != area
+    {
         return None;
     }
-    let id = d.add_layer();
-    d.rename(id, name);
-    d.set_control(id, Some(kind.into()));
-    if let (Some(canvas), Some(gpu)) = (st.canvas.as_mut(), st.gpu.as_ref()) {
-        canvas.name_next_step("control layer from picture");
-        canvas.record_document(before);
-        canvas.upload_layer_part(gpu, id, area, pixels).ok()?;
+    let before = st.doc.clone();
+    let (Some(canvas), Some(gpu)) = (st.canvas.as_mut(), st.gpu.as_ref()) else { return None };
+    if let Some(mask) = mask {
+        canvas.render_finished(gpu, &mut st.doc);
+        // a layer never painted has no pixels yet: nothing of its own to keep
+        let own = canvas.read_layer_part(gpu, layer, area).unwrap_or_else(|_| vec![0; lines.len()]);
+        for ((px, old), &m) in lines.as_chunks_mut::<4>().0.iter_mut().zip(own.as_chunks::<4>().0).zip(mask) {
+            let m = u16::from(m);
+            for (c, &o) in px.iter_mut().zip(old) {
+                *c = ((u16::from(*c) * m + u16::from(o) * (255 - m) + 127) / 255) as u8;
+            }
+        }
     }
+    canvas.name_next_step("trace control layer");
+    canvas.write_layer_parts_and_document(vec![(layer, area, lines)], before);
     st.revision += 1;
     shared.frame(st);
-    Some(id.0)
+    Some(layer.0)
 }
 
 /// Whether a selection is mostly transparent pixels at the canvas edge (then Expand), else Fill.
@@ -1844,8 +1847,8 @@ impl CanvasSession {
     }
 
     /// Layer `id`'s pixels over `area`, flattened onto white and turned into white lines on black
-    /// (a control image), at the area's size.
-    fn control_picture(&self, id: LayerId, area: IRect) -> Result<Picture, GenerationError> {
+    /// (a control image), at the area's size; none when nothing is drawn there.
+    fn control_picture(&self, id: LayerId, area: IRect) -> Result<Option<Picture>, GenerationError> {
         let mut guard = self.shared.lock_finished();
         let st = &mut *guard;
         st.finish_stroke();
@@ -1858,13 +1861,14 @@ impl CanvasSession {
         canvas.render_finished(gpu, &mut st.doc);
         let pixels = match canvas.read_layer_part(gpu, id, area) {
             Ok(pixels) => pixels,
-            Err(e) if e.to_string().contains("no layer") => {
-                // a layer never painted has no pixels yet: its control image is blank
-                vec![0; area.width() as usize * area.height() as usize * 4]
-            }
+            // a layer never painted has no pixels yet
+            Err(e) if e.to_string().contains("no layer") => return Ok(None),
             Err(e) => return Err(unreadable(e.to_string())),
         };
-        Picture::control(area.width(), area.height(), &pixels).map_err(|e| unreadable(e.to_string()))
+        if pixels.as_chunks::<4>().0.iter().all(|px| px[3] == 0) {
+            return Ok(None);
+        }
+        Picture::control(area.width(), area.height(), &pixels).map(Some).map_err(|e| unreadable(e.to_string()))
     }
 
     /// The picture for a control layer from the picture: `area`'s part of the canvas without its
@@ -1946,6 +1950,8 @@ mod tests {
         let id = s.layers()[0].id;
         assert!(s.set_layer_control(id, Some(LayerControl::LineArt)));
         assert_eq!(s.layers()[0].control, Some(LayerControl::LineArt));
+        let lines = Picture::new(32, 32, vec![255; 32 * 32 * 4]).unwrap().lines_alpha();
+        assert!(replace_control_pixels(&s.shared, LayerId(id), IRect::from_size(32, 32), lines, None).is_some());
         assert!(s.layer_options(id).iter().any(|r| r.option == crate::LayerOption::ControlLayer));
         let generation = Generation::new(settings());
         let listed = generation.control_layers(&s);
@@ -1972,48 +1978,55 @@ mod tests {
     }
 
     #[test]
-    fn extracted_lines_are_black_with_their_luminance_as_alpha() {
-        let lines = Picture::new(4, 1, vec![255; 16]).unwrap();
-        assert_eq!(extracted_pixels(&lines, None), [0u8, 0, 0, 255].repeat(4));
-        // the selection masks the lines' alpha
-        let masked = extracted_pixels(&lines, Some(&[0, 255, 128, 0]));
-        assert_eq!(masked, vec![0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 128, 0, 0, 0, 0]);
+    fn tracing_replaces_a_control_layer_s_pixels_as_one_undo_step() {
+        let Some(s) = session(64) else { return };
+        let id = s.add_control_layer(LayerControl::LineArt);
+        assert!(id != 0);
+        let layer = LayerId(id);
+        // white lines on black come back as black lines, their luminance as alpha
+        let lines = Picture::new(4, 4, vec![255; 64]).unwrap().lines_alpha();
+        assert_eq!(&lines[..4], &[0, 0, 0, 255]);
+        let area = IRect::from_size(4, 4);
+        assert_eq!(replace_control_pixels(&s.shared, layer, area, lines.clone(), None), Some(id));
+        assert_eq!(at(&composite(&s), 64, 0, 0), [0, 0, 0, 255], "black lines on the canvas");
+        // within a selection: only where it's selected; the rest keeps the layer's own
+        let clear = vec![0u8; 64];
+        let mut mask = vec![0u8; 16];
+        mask[0] = 255;
+        assert_eq!(replace_control_pixels(&s.shared, layer, area, clear, Some(&mask)), Some(id));
+        let after = composite(&s);
+        assert_ne!(at(&after, 64, 0, 0), [0, 0, 0, 255], "selected: replaced");
+        assert_eq!(at(&after, 64, 1, 0), [0, 0, 0, 255], "not selected: kept");
+        // one undo brings the lines back
+        s.undo();
+        assert_eq!(at(&composite(&s), 64, 0, 0), [0, 0, 0, 255]);
+        // only a control layer is traced into
+        assert!(s.set_layer_control(id, None));
+        assert_eq!(replace_control_pixels(&s.shared, layer, area, lines, None), None);
     }
 
     #[test]
-    fn an_extracted_control_layer_lands_above_the_current_one_and_undo_takes_it_away() {
+    fn a_new_control_layer_is_empty_above_the_current_one_and_one_undo_step() {
         let Some(s) = session(64) else { return };
-        // a layer below and one above, the lower current: the lines go between them
         let lower = s.shared.lock().doc.current();
-        let above = s.change("layer", |d| Some(d.add_layer())).unwrap();
-        s.change("current", |d| d.set_current(lower).then_some(()));
-        let lines = Picture::new(2, 2, vec![255; 16]).unwrap();
-        let pixels = extracted_pixels(&lines, None);
-        let id = add_control_from_picture(
-            &s.shared,
-            IRect::from_size(2, 2),
-            &pixels,
-            control_layer_name(LayerControl::LineArt),
-            LayerControl::LineArt,
-        )
-        .unwrap();
+        let id = s.add_control_layer(LayerControl::Scribble);
         {
             let st = s.shared.lock();
             let members = st.doc.members(None);
             let at = members.iter().position(|m| *m == lower).map(|i| i + 1);
             assert_eq!(members.iter().position(|m| m.0 == id), at, "just above the current one");
+            assert_eq!(st.doc.current().0, id, "and current");
             let layer = st.doc.layer(LayerId(id)).unwrap();
-            assert_eq!(layer.name, "Line art (from picture)");
+            assert_eq!(layer.name, "Scribble");
             assert_eq!(
                 layer.control,
-                Some(procraft_engine::document::Control { kind: procraft_engine::document::ControlKind::LineArt })
+                Some(procraft_engine::document::Control { kind: procraft_engine::document::ControlKind::Scribble })
             );
         }
-        assert_eq!(at(&composite(&s), 64, 0, 0), [0, 0, 0, 255], "black lines on the canvas");
+        // empty, it isn't sent with a run
+        assert!(run_controls(&s, &[], IRect::from_size(64, 64)).unwrap().is_empty());
         s.undo();
         assert!(s.shared.lock().doc.layer(LayerId(id)).is_none(), "one undo takes it away");
-        assert!(s.shared.lock().doc.layer(above).is_some(), "and nothing else");
-        assert_eq!(control_layer_name(LayerControl::Scribble), "Scribble (from picture)");
     }
 
     #[test]

@@ -157,31 +157,43 @@ ProCraft's margins:
 
 ## A6. Control layers
 
-- **Making one**: the layer's options menu has a row **"Control layer"** (beside Reference and
-  Drawing Assist) opening a small menu: **None** · **Line art** · **Scribble** ·
-  **Line art from picture** · **Scribble from picture**.
+- **Making one** *(reworked 2026-11-05, Krita's way; sketches in `mockups/control-trace.html`,
+  option A)*: two ways, one per place.
+  - **In the popover**: a **Control** part is always there, ending in **+ Line art** and
+    **+ Scribble**. Each adds an **empty** control layer of that kind, named "Line art" /
+    "Scribble", just above the current one and made current, ready to draw on; one undo step
+    ("New control layer").
+  - **In the Layers panel**: the layer's options menu has a row **"Control layer"** (beside
+    Reference and Drawing Assist) opening a small menu: **None** · **Line art** · **Scribble**, for
+    a layer already drawn.
   - Line art: clean lines. Scribble: rough strokes.
-  - **…from picture** *(decided 2026-11-05, brought forward from Phase 2)*: what's visible (the
-    whole canvas, or inside the selection when there is one; control layers left out) goes to the
-    server's extractor, and the lines come back as a **new layer** just above the current one —
-    black lines on transparent, already a control layer of that kind, named "Line art (from
-    picture)" / "Scribble (from picture)". Nothing is overwritten: the lines can be erased, painted
-    over, hidden or deleted. One undo step ("Control layer from picture"). The run shows the usual
-    progress ring; Cancel stops it. Extractors (from `comfyui_controlnet_aux`, tuned on the dev
-    server, never named in the UI): line art `AnimeLineArtPreprocessor`, scribble
-    `Scribble_PiDiNet_Preprocessor` — the first choice, kept if they look right on real pictures.
-    Needs the add-on, checked like the others (§B12); without it the two rows are disabled with
-    "needs comfyui_controlnet_aux".
-    *As built (2026-11-05):* the picture goes at its own size up to 3 MP, and the extractors are
-    asked for the shorter side rounded to 64 between 512 and 2048; the lines come back at the
-    selected bounds' (or canvas's) size, their luminance becoming the new layer's alpha. The run
-    reports `extracting` (and its kind) in its state, and the layer's id once through
-    `made_layer`.
+- **Trace** *(replaces the "…from picture" menu rows of 2026-11-05)*: each control row in the
+  popover has a small **trace** button (a drawn line with a four-point sparkle, beside ×). It sends
+  what's visible (the whole canvas, or inside the selection when there is one; control layers left
+  out) to the server's extractor for that layer's kind, and the lines **replace that layer's
+  pixels** there (inside a selection only; elsewhere the layer keeps its own): black lines on
+  transparent, one undo step ("Trace control layer"), so one undo brings back what was drawn. So
+  tracing from nothing is two taps (+ Line art, then trace), as in Krita, and a layer can be traced
+  again after the picture changes. While it runs the button is a progress ring, the results bar
+  says "Tracing line art…", and the other trace buttons wait. Extractors (from
+  `comfyui_controlnet_aux`, tuned on the dev server, never named in the UI): line art
+  `AnimeLineArtPreprocessor`, scribble `PiDiNetPreprocessor` (safe) then `ScribblePreprocessor`, as
+  krita-ai-diffusion does (the one-step `Scribble_PiDiNet_Preprocessor` left broken dots; changed
+  2026-11-05 on the user's report). Needs the add-on, checked
+  like the others (§B12); without it a trace says "needs comfyui_controlnet_aux".
+  *As built (2026-11-05):* the picture goes at its own size up to 3 MP, and the extractors are
+  asked for the shorter side rounded to 64 between 512 and 2048; the lines come back at the
+  selected bounds' (or canvas's) size, their luminance becoming the layer's alpha. The core's
+  `trace_control(session, layer)` starts it; the run reports `extracting`, its kind and
+  `extract_layer` in its state, and the layer's id once through `made_layer` when the lines land.
+- **Empty control layers are left out of a run**: a layer with nothing drawn in the run's area isn't
+  sent, since a blank guide would only steer the picture towards empty space.
 - **In the Layers panel**: Android names it under the layer's name, the way ProCraft marks a
   Reference layer ("Line art control" / "Scribble control"); desktop shows a small badge left of
   the blend letter. Otherwise it's a normal layer: painted, hidden, moved as usual.
-- **In the popover** each control layer has its row: thumbnail, name, kind, **how closely to
-  follow it** in four steps — **Loose · Balanced · Close · Strict** — and a remove button.
+- **In the popover** each control layer has its row: thumbnail, name, kind, the trace button, a
+  remove button (× makes it a plain layer again; its pixels stay), and **how closely to follow it**
+  in four steps — **Loose · Balanced · Close · Strict**.
   **Balanced** is the default for both kinds *(decided 2026-11-05; replaces the 0–100 % slider)*.
   Each step is a pair (strength, the share of the steps the control is applied for), as constants
   in `family/anima.rs`, tuned on the dev server: Loose only shapes the start so the model can
@@ -467,9 +479,9 @@ mask and `start_percent` 0. Its strength and how far through sampling it applies
 from constants in `family/anima.rs`: Loose 0.5 to 0.4, Balanced 0.6 to 0.6, Close 0.7 to 0.8,
 Strict 1.0 to 1.0 (strength, end_percent), the same for line art and scribble; Balanced is the
 default. A control image is sent at each pass's size, so both passes of a two-pass picture follow
-it. A control layer from a picture goes through its own family-free graph
+it. A trace goes through its own family-free graph
 (`crates/diffusion/src/extract.rs`): `ETN_LoadImageBase64` → `AnimeLineArtPreprocessor`, or
-`Scribble_PiDiNet_Preprocessor` with `safe` on, at the shorter side rounded to 64 between 512 and
+`PiDiNetPreprocessor` with `safe` on into `ScribblePreprocessor`, each at the shorter side rounded to 64 between 512 and
 2048 → `ETN_SendImageWebSocket` PNG; the picture is sent at its own size up to 3 MP and its lines
 are scaled back to the selected bounds.
 
@@ -622,7 +634,7 @@ A style (`styles/anima.json`, our own file):
 | `comfyui-tooling-nodes` | everything (image in/out) | `ETN_LoadImageBase64`, `ETN_SendImageWebSocket` present |
 | ″ | control layers, selections | `ETN_control_load`, `ETN_control_apply` present |
 | `comfyui-inpaint-nodes` | selections | `INPAINT_ExpandMask`, `INPAINT_MaskedFill`, `INPAINT_ColorMatch` present |
-| `comfyui_controlnet_aux` | control layers from a picture | `AnimeLineArtPreprocessor`, `Scribble_PiDiNet_Preprocessor` present |
+| `comfyui_controlnet_aux` | tracing control layers | `AnimeLineArtPreprocessor`, `PiDiNetPreprocessor`, `ScribblePreprocessor` present |
 | Anima checkpoint | everything | a `UNETLoader` choice matching `*anima*` |
 | `qwen_3_06b*` text encoder | everything | `CLIPLoader` choice |
 | `qwen_image_vae*` | everything | `VAELoader` choice |

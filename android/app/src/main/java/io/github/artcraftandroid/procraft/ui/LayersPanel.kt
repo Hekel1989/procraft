@@ -1000,10 +1000,6 @@ private fun LayerOptions(open: Boolean, vm: CanvasViewModel, l: LayerInfo, rowY:
                 if (choosingControl) {
                     val kinds = listOf(null to "None", io.github.artcraftandroid.procraft.core.LayerControl.LINE_ART to "Line art", io.github.artcraftandroid.procraft.core.LayerControl.SCRIBBLE to "Scribble")
                     for ((kind, words) in kinds) Option(words, checked = l.control == kind, enabled = true, onClick = { vm.setLayerControl(l, kind); onDone() })
-                    // lines from what's visible, on the server, into a new control layer above
-                    val can = io.github.artcraftandroid.procraft.generation.GenerationUi.canExtract()
-                    Option("Line art from picture", checked = false, enabled = can, onClick = { io.github.artcraftandroid.procraft.generation.GenerationUi.fromPicture(vm, io.github.artcraftandroid.procraft.core.LayerControl.LINE_ART); onDone() })
-                    Option("Scribble from picture", checked = false, enabled = can, onClick = { io.github.artcraftandroid.procraft.generation.GenerationUi.fromPicture(vm, io.github.artcraftandroid.procraft.core.LayerControl.SCRIBBLE); onDone() })
                 }
                 // the core's rows: each closes the menu, a switch's too (it shows ticked next time)
                 if (!choosingControl) for (r in rows) {

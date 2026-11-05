@@ -208,6 +208,21 @@ impl CanvasSession {
         true
     }
 
+    /// A new empty control layer of `kind` above the current one, named after its kind and made
+    /// current, as one step ("Undo new control layer"); 0 when the canvas has no room for another.
+    pub fn add_control_layer(&self, kind: LayerControl) -> u64 {
+        self.change("new control layer", |d| {
+            if !d.has_room(1) {
+                return None;
+            }
+            let id = d.add_layer();
+            d.rename(id, if kind == LayerControl::LineArt { "Line art" } else { "Scribble" });
+            d.set_control(id, Some(kind.into()));
+            Some(id.0)
+        })
+        .unwrap_or(0)
+    }
+
     /// Makes layer `id` guide generation as `kind` (or, `None`, an ordinary layer) through its
     /// pixels: one step ("Undo control layer on"). False unless it is a raster layer.
     pub fn set_layer_control(&self, id: u64, kind: Option<LayerControl>) -> bool {

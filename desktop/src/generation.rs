@@ -31,6 +31,30 @@ pub const GENERATE: Icon = Icon {
     ],
 };
 
+/// Trace: a drawn line and a four-point sparkle, "lines, made for you" (24-unit grid).
+const TRACE: Icon = Icon {
+    name: "trace",
+    width: 24.0,
+    height: 24.0,
+    parts: &[
+        Part {
+            d: "M3.2 19.5C5.4 13.9 7.8 12.1 9.8 14.9C11.8 17.7 13.8 18.3 16.2 12.7",
+            stroke: 2.4,
+            fill: false,
+            even_odd: false,
+        },
+        Part {
+            d: "M17.4 2Q18.08 5.12 21.2 5.8Q18.08 6.48 17.4 9.6Q16.72 6.48 13.6 5.8Q16.72 5.12 17.4 2Z",
+            stroke: 0.0,
+            fill: true,
+            even_odd: false,
+        },
+    ],
+};
+
+/// The Control part's + Line art / + Scribble row.
+const ADD_ROW: f32 = 40.0;
+
 const WIDTH: f32 = 400.0;
 const PAD: f32 = 16.0;
 const LABEL: Themed = Themed(0x99FFFFFF, 0x99000000);
@@ -177,7 +201,7 @@ impl GenerationUi {
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.state = self.generation.state();
         if self.state.made_layer.is_some() {
-            // an extracted control layer landed: the popover reads the layers again next frame
+            // a trace landed in a control layer: the popover reads the layers again next frame
             self.control_signature.clear();
         }
         self.server = self.generation.server();
@@ -292,8 +316,7 @@ impl GenerationUi {
     fn form_height(&self) -> f32 {
         let error = if self.state.error.is_some() { 40.0 } else { 0.0 };
         let selection = if self.selection.is_some() { 70.0 } else { 0.0 };
-        let controls =
-            if self.controls.is_empty() { 0.0 } else { 22.0 + CONTROL_ROW * self.controls.len() as f32 + 4.0 };
+        let controls = 22.0 + CONTROL_ROW * self.controls.len() as f32 + ADD_ROW + 10.0;
         let strip = crate::generation_tags::STRIP_HEIGHT + crate::generation_tags::STRIP_GAP;
         56.0 + 22.0
             + 84.0
@@ -451,12 +474,14 @@ impl GenerationUi {
         let enter = !took_enter && focused && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         y += 90.0 + crate::generation_tags::STRIP_HEIGHT + crate::generation_tags::STRIP_GAP;
         // control layers: one row each, its picture, what it is, how closely to follow it in four
-        // steps, and a × to stop using the layer as one
-        if !self.controls.is_empty() {
-            label(ui, pos2(left + 2.0, y), "CONTROL LAYERS");
+        // steps, a trace button and a × to stop using the layer as one; then + Line art and
+        // + Scribble, each adding an empty one to draw on or trace into
+        {
+            label(ui, pos2(left + 2.0, y), "CONTROL");
             y += 22.0;
             let controls = self.controls.clone();
             let mut removed = None;
+            let mut traced = None;
             for control in &controls {
                 let row = Rect::from_min_max(pos2(left, y), pos2(right, y + CONTROL_ROW));
                 ui.painter().rect_filled(row, 10.0, argb(ROW));
@@ -519,6 +544,21 @@ impl GenerationUi {
                         *step = value;
                     }
                 }
+                // trace the picture into it; a ring while it goes
+                let trace = Rect::from_center_size(pos2(row.right() - 58.0, row.top() + 19.0), vec2(30.0, 30.0));
+                let idle = self.state.running.is_none();
+                ui.painter().rect_filled(trace, 8.0, argb(FIELD));
+                match self.state.running.as_ref().filter(|r| r.extract_layer == Some(control.id)) {
+                    Some(r) => ring(ui, trace.center(), 9.0, r.progress),
+                    None => {
+                        let ink = if idle { argb(INK) } else { argb(DIM) };
+                        look.icon(ui, &TRACE, trace.center(), 20.0, ink);
+                    }
+                }
+                let tapped = ui.interact(trace, ui.scope_id().with(("trace", control.id)), Sense::click());
+                if idle && tapped.on_hover_text("Trace the picture").clicked() {
+                    traced = Some(control.id);
+                }
                 let remove = Rect::from_center_size(pos2(row.right() - 22.0, row.top() + 19.0), vec2(30.0, 30.0));
                 text(ui.painter(), remove.center(), Align2::CENTER_CENTER, "×", 20.0, Weight::Regular, argb(DIM));
                 if ui.interact(remove, ui.scope_id().with(("control off", control.id)), Sense::click()).clicked() {
@@ -532,7 +572,46 @@ impl GenerationUi {
                 self.control_pictures.remove(&id);
                 self.control_steps.remove(&id);
             }
+            if let Some(id) = traced
+                && let Err(e) = self.generation.trace_control(session, id)
+            {
+                self.state.error = Some(e.to_string());
+            }
             y += 4.0;
+            let half = (right - left - 8.0) / 2.0;
+            for (i, (kind, words)) in
+                [(LayerControl::LineArt, "Line art"), (LayerControl::Scribble, "Scribble")].into_iter().enumerate()
+            {
+                let x = left + i as f32 * (half + 8.0);
+                let add = Rect::from_min_size(pos2(x, y), vec2(half, ADD_ROW));
+                ui.painter().rect_filled(add, 10.0, argb(ROW));
+                let words_w = text_width(ui.painter(), words, 14.0, Weight::Regular);
+                let start = add.center().x - (words_w + 16.0) / 2.0;
+                text(
+                    ui.painter(),
+                    pos2(start, add.center().y),
+                    Align2::LEFT_CENTER,
+                    "+",
+                    17.0,
+                    Weight::Regular,
+                    argb(pc::ACCENT),
+                );
+                text(
+                    ui.painter(),
+                    pos2(start + 16.0, add.center().y),
+                    Align2::LEFT_CENTER,
+                    words,
+                    14.0,
+                    Weight::Regular,
+                    argb(INK),
+                );
+                if ui.interact(add, ui.scope_id().with(("add control", i)), Sense::click()).clicked()
+                    && session.add_control_layer(kind) == 0
+                {
+                    self.state.error = Some("No room for another layer".to_owned());
+                }
+            }
+            y += ADD_ROW + 6.0;
         }
         // the selection's mode, the guessed one until the user picks another
         if let Some(selection) = self.selection {
@@ -675,7 +754,7 @@ impl GenerationUi {
             && self.prompt.trim().is_empty();
         let ready = self.server.connection == ServerConnection::Connected && !styles.is_empty() && !add_waiting;
         let words = match running {
-            Some(r) if r.extracting => format!("Cancel · Making {}…", extract_name(r.extract_kind)),
+            Some(r) if r.extracting => format!("Cancel · Tracing {}…", extract_name(r.extract_kind)),
             Some(r) => format!("Cancel · {:.0}%", r.progress * 100.0),
             None if self.count > 1 => format!("Generate {}", self.count),
             None => "Generate".to_owned(),
@@ -1125,7 +1204,7 @@ impl GenerationUi {
                     self.generation.cancel();
                 }
                 if run.extracting {
-                    let words = format!("Making {}…", extract_name(run.extract_kind));
+                    let words = format!("Tracing {}…", extract_name(run.extract_kind));
                     text(
                         ui.painter(),
                         pos2(cell.right() + 10.0, cy),

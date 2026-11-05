@@ -124,6 +124,19 @@ object GenerationUi {
         }.build()
     }
 
+    /** Trace: a drawn line and a four-point sparkle, "lines, made for you" (24-unit grid). */
+    private val TraceIcon: ImageVector by lazy {
+        ImageVector.Builder("trace", 24.dp, 24.dp, 24f, 24f).apply {
+            path(fill = null, stroke = SolidColor(Color.White), strokeLineWidth = 2.4f, strokeLineCap = StrokeCap.Round) {
+                moveTo(3.2f, 19.5f); curveTo(5.4f, 13.9f, 7.8f, 12.1f, 9.8f, 14.9f); curveTo(11.8f, 17.7f, 13.8f, 18.3f, 16.2f, 12.7f)
+            }
+            path(fill = SolidColor(Color.White)) {
+                moveTo(17.4f, 2f); quadTo(18.08f, 5.12f, 21.2f, 5.8f); quadTo(18.08f, 6.48f, 17.4f, 9.6f)
+                quadTo(16.72f, 6.48f, 13.6f, 5.8f); quadTo(16.72f, 5.12f, 17.4f, 2f); close()
+            }
+        }.build()
+    }
+
     private enum class View { FORM, SERVER }
 
     // the app's Generation, made with the settings kept, and the form's and bar's state
@@ -187,7 +200,7 @@ object GenerationUi {
     /** Looks at the run and the server; makes bitmaps for new results. */
     private fun poll(g: Generation) {
         state = g.state()
-        // a control layer made from the picture landed: the layers panel shows it
+        // a trace landed in a control layer: the layers panel shows it
         if (state.madeLayer != null) refreshLayers?.invoke()
         server = g.server()
         val ids = state.results.map { it.id }.toSet()
@@ -244,15 +257,11 @@ object GenerationUi {
         generation?.setFolder(session, folder)
     }
 
-    /** Whether the server can make line art or scribble from the picture (it has the extractors). */
-    fun canExtract(): Boolean = generation?.canExtract() ?: false
-
-    /** Makes a control layer of `kind` from the visible picture, on the server; errors show in the bar. */
-    fun fromPicture(vm: CanvasViewModel, kind: io.github.artcraftandroid.procraft.core.LayerControl) {
-        val g = generation ?: return
+    /** Traces the visible picture into control layer `layer`, on the server; errors show in the bar. */
+    private fun trace(vm: CanvasViewModel, g: Generation, layer: ULong) {
         val s = vm.session ?: return
         error = try {
-            g.controlFromPicture(s, kind)
+            g.traceControl(s, layer)
             null
         } catch (e: GenerationException) {
             e.message
@@ -401,30 +410,54 @@ object GenerationUi {
                     }
                 }
             }
-            // control layers: one row each, its strength, and × to make it a plain layer again
+            // control layers: one row each (trace, × to make it a plain layer again, how closely to
+            // follow it), then + Line art and + Scribble to add an empty one to draw on or trace into
             val controls = vm.session?.let { s -> g.controlLayers(s).filter { it.visible } } ?: emptyList()
-            if (controls.isNotEmpty()) {
-                Label("CONTROL LAYERS")
-                for (c in controls) {
-                    val step = controlSteps[c.id] ?: io.github.artcraftandroid.procraft.core.ControlStep.BALANCED
-                    Row(Modifier.padding(horizontal = 16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Image(c.thumbnail.bitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.size(36.dp).clip(RoundedCornerShape(7.dp)).background(Color.White))
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(c.name, color = Ink, fontSize = 14.sp, maxLines = 1)
-                            Text(if (c.kind == io.github.artcraftandroid.procraft.core.LayerControl.LINE_ART) "Line art" else "Scribble", color = Dim, fontSize = 12.sp)
-                        }
-                        Text("×", color = Dim, fontSize = 22.sp, modifier = Modifier.tap { vm.session?.setLayerControl(c.id, null); vm.refresh() }.padding(horizontal = 8.dp))
+            Label("CONTROL")
+            for (c in controls) {
+                val step = controlSteps[c.id] ?: io.github.artcraftandroid.procraft.core.ControlStep.BALANCED
+                val tracing = state.running?.extractLayer == c.id
+                Row(Modifier.padding(horizontal = 16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Image(c.thumbnail.bitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.size(36.dp).clip(RoundedCornerShape(7.dp)).background(Color.White))
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(c.name, color = Ink, fontSize = 14.sp, maxLines = 1)
+                        Text(if (c.kind == io.github.artcraftandroid.procraft.core.LayerControl.LINE_ART) "Line art" else "Scribble", color = Dim, fontSize = 12.sp)
                     }
-                    // how closely to follow it: four steps, Balanced at first
-                    Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 8.dp).fillMaxWidth().height(36.dp).clip(RoundedCornerShape(11.dp)).background(RowFill).padding(3.dp)) {
-                        for ((choice, words) in listOf(io.github.artcraftandroid.procraft.core.ControlStep.LOOSE to "Loose", io.github.artcraftandroid.procraft.core.ControlStep.BALANCED to "Balanced", io.github.artcraftandroid.procraft.core.ControlStep.CLOSE to "Close", io.github.artcraftandroid.procraft.core.ControlStep.STRICT to "Strict")) {
-                            val on = step == choice
-                            Box(
-                                Modifier.weight(1f).height(30.dp).clip(RoundedCornerShape(8.dp)).background(if (on) Pc.Accent else Color.Transparent).tap { controlSteps[c.id] = choice },
-                                contentAlignment = Alignment.Center,
-                            ) { Text(words, color = if (on) Color.White else Dim, fontSize = 13.sp, fontWeight = FontWeight.Medium) }
-                        }
+                    // trace the picture into it; a ring while it goes
+                    Box(
+                        Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(RowFill).tap(enabled = state.running == null) { trace(vm, g, c.id) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (tracing) ProgressRing(state.running?.progress ?: 0f, Modifier.size(22.dp))
+                        else Icon(TraceIcon, "Trace the picture", tint = Ink.copy(alpha = if (state.running == null) 0.9f else 0.35f), modifier = Modifier.size(22.dp))
+                    }
+                    Text("×", color = Dim, fontSize = 22.sp, modifier = Modifier.tap { vm.session?.setLayerControl(c.id, null); vm.refresh() }.padding(horizontal = 10.dp))
+                }
+                // how closely to follow it: four steps, Balanced at first
+                Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 8.dp).fillMaxWidth().height(36.dp).clip(RoundedCornerShape(11.dp)).background(RowFill).padding(3.dp)) {
+                    for ((choice, words) in listOf(io.github.artcraftandroid.procraft.core.ControlStep.LOOSE to "Loose", io.github.artcraftandroid.procraft.core.ControlStep.BALANCED to "Balanced", io.github.artcraftandroid.procraft.core.ControlStep.CLOSE to "Close", io.github.artcraftandroid.procraft.core.ControlStep.STRICT to "Strict")) {
+                        val on = step == choice
+                        Box(
+                            Modifier.weight(1f).height(30.dp).clip(RoundedCornerShape(8.dp)).background(if (on) Pc.Accent else Color.Transparent).tap { controlSteps[c.id] = choice },
+                            contentAlignment = Alignment.Center,
+                        ) { Text(words, color = if (on) Color.White else Dim, fontSize = 13.sp, fontWeight = FontWeight.Medium) }
+                    }
+                }
+            }
+            Row(Modifier.padding(horizontal = 16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for ((kind, words) in listOf(io.github.artcraftandroid.procraft.core.LayerControl.LINE_ART to "Line art", io.github.artcraftandroid.procraft.core.LayerControl.SCRIBBLE to "Scribble")) {
+                    Row(
+                        Modifier.weight(1f).height(40.dp).clip(RoundedCornerShape(12.dp)).background(RowFill).tap {
+                            vm.session?.let { s -> if (s.addControlLayer(kind) == 0uL) error = "No room for another layer" }
+                            vm.refresh()
+                        },
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("+", color = Pc.Accent, fontSize = 18.sp)
+                        Spacer(Modifier.width(6.dp))
+                        Text(words, color = Ink, fontSize = 14.sp)
                     }
                 }
             }
@@ -733,7 +766,7 @@ object GenerationUi {
                     }
                     if (run.extracting) {
                         val what = if (run.extractKind == io.github.artcraftandroid.procraft.core.LayerControl.SCRIBBLE) "scribble" else "line art"
-                        Text("Making $what…", color = Dim, fontSize = 13.sp, maxLines = 1)
+                        Text("Tracing $what…", color = Dim, fontSize = 13.sp, maxLines = 1)
                     }
                 }
                 state.error?.let { Text(it, color = WARN, fontSize = 12.sp, maxLines = 2, modifier = Modifier.widthIn(max = 260.dp)) }
