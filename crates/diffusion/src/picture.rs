@@ -1,7 +1,7 @@
 //! Pictures as they go to the server and come back: straight (not premultiplied) RGBA8, rows top to
 //! bottom, sRGB.
 
-use image::{ImageFormat, RgbaImage, imageops::FilterType};
+use image::{GrayImage, ImageFormat, RgbaImage, imageops::FilterType};
 
 use crate::Error;
 
@@ -51,6 +51,62 @@ impl Picture {
         Picture::new(scaled.width(), scaled.height(), scaled.into_raw())
     }
 
+    /// The part of the picture at `x`, `y`, `width × height` (canvas pixels).
+    pub fn cropped(&self, x: u32, y: u32, width: u32, height: u32) -> Result<Picture, Error> {
+        let right = x.checked_add(width).ok_or_else(|| Error::picture("the crop is off the picture"))?;
+        let bottom = y.checked_add(height).ok_or_else(|| Error::picture("the crop is off the picture"))?;
+        if width == 0 || height == 0 || right > self.width || bottom > self.height {
+            return Err(Error::picture("the crop is off the picture"));
+        }
+        let stride = self.width as usize * 4;
+        let row = width as usize * 4;
+        let mut rgba = Vec::with_capacity(row * height as usize);
+        for line in y..bottom {
+            let at = (line as usize * stride) + x as usize * 4;
+            let Some(part) = self.rgba.get(at..at + row) else {
+                return Err(Error::picture("the crop is off the picture"));
+            };
+            rgba.extend_from_slice(part);
+        }
+        Picture::new(width, height, rgba)
+    }
+
+    /// The selection `mask` (`width × height`, one byte per pixel) scaled to `new_width ×
+    /// new_height`, its soft edges kept.
+    pub fn resized_mask(
+        width: u32,
+        height: u32,
+        mask: &[u8],
+        new_width: u32,
+        new_height: u32,
+    ) -> Result<Vec<u8>, Error> {
+        let expected = u64::from(width) * u64::from(height);
+        if width == 0 || height == 0 || mask.len() as u64 != expected {
+            return Err(Error::picture(format!("{} bytes aren't a {width} × {height} mask", mask.len())));
+        }
+        if (width, height) == (new_width, new_height) {
+            return Ok(mask.to_vec());
+        }
+        let image = GrayImage::from_raw(width, height, mask.to_vec())
+            .ok_or_else(|| Error::picture("the mask doesn't match its size"))?;
+        let scaled = image::imageops::resize(&image, new_width.max(1), new_height.max(1), FilterType::Lanczos3);
+        Ok(scaled.into_raw())
+    }
+
+    /// A greyscale PNG of a selection `mask` (one byte per pixel, white selected), the size of the
+    /// area it covers.
+    pub fn mask_png(width: u32, height: u32, mask: &[u8]) -> Result<Vec<u8>, Error> {
+        let expected = u64::from(width) * u64::from(height);
+        if width == 0 || height == 0 || mask.len() as u64 != expected {
+            return Err(Error::picture(format!("{} bytes aren't a {width} × {height} mask", mask.len())));
+        }
+        let image = GrayImage::from_raw(width, height, mask.to_vec())
+            .ok_or_else(|| Error::picture("the mask doesn't match its size"))?;
+        let mut out = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut out, ImageFormat::Png).map_err(Error::picture)?;
+        Ok(out.into_inner())
+    }
+
     /// The picture scaled down to fit in `side × side`, keeping its shape (as it is if it fits).
     pub fn thumbnail(&self, side: u32) -> Result<Picture, Error> {
         let scale = f64::from(side) / f64::from(self.width.max(self.height));
@@ -95,6 +151,28 @@ mod tests {
     fn png_goes_both_ways() {
         let p = checker(7, 5);
         assert_eq!(Picture::decode(&p.to_png().unwrap()).unwrap(), p);
+    }
+
+    #[test]
+    fn a_crop_holds_its_part_of_the_picture() {
+        let p = Picture::new(3, 2, (0..6).flat_map(|i| [i, i, i, 255]).collect()).unwrap();
+        let crop = p.cropped(1, 1, 2, 1).unwrap();
+        assert_eq!((crop.width, crop.height), (2, 1));
+        assert_eq!(crop.rgba, vec![4, 4, 4, 255, 5, 5, 5, 255]);
+        assert!(p.cropped(2, 1, 2, 1).is_err());
+        assert!(p.cropped(0, 0, 0, 1).is_err());
+    }
+
+    #[test]
+    fn a_mask_is_a_greyscale_png() {
+        let png = Picture::mask_png(2, 2, &[0, 128, 255, 64]).unwrap();
+        let image = image::load_from_memory(&png).unwrap().into_luma8();
+        assert_eq!((image.width(), image.height()), (2, 2));
+        assert_eq!(image.into_raw(), vec![0, 128, 255, 64]);
+        assert!(Picture::mask_png(2, 2, &[0, 1, 2]).is_err());
+        let scaled = Picture::resized_mask(2, 2, &[0, 128, 255, 64], 4, 4).unwrap();
+        assert_eq!(scaled.len(), 16);
+        assert_eq!(Picture::resized_mask(2, 2, &[0, 128, 255, 64], 2, 2), Ok(vec![0, 128, 255, 64]));
     }
 
     #[test]

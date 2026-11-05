@@ -48,6 +48,7 @@ fn turbo(server: &ServerState, size: (u32, u32), count: u32) -> Request {
         seed: 1234,
         count,
         picture: None,
+        selection: None,
         size,
         resolution: Resolution::Quality,
         largest: Some(6.0),

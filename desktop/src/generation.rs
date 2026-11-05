@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use egui::{Align2, Color32, Id, Order, Rect, Sense, TextureHandle, TextureOptions, Ui, UiBuilder, pos2, vec2};
 use procraft_core::{
-    CanvasSession, Generation, GenerationResolution, GenerationSettings, GenerationState, RunSettings,
-    ServerConnection, ServerStatus, SizeInfo, ThumbnailImage,
+    CanvasSession, Generation, GenerationMode, GenerationResolution, GenerationSettings, GenerationState, RunSettings,
+    SelectionInfo, ServerConnection, ServerStatus, SizeInfo, ThumbnailImage,
 };
 
 use crate::icons::{self, Icon, Part};
@@ -51,6 +51,9 @@ const POLL: Duration = Duration::from_millis(100);
 const RESOLUTIONS: [GenerationResolution; 3] =
     [GenerationResolution::Draft, GenerationResolution::Normal, GenerationResolution::Quality];
 const RESOLUTION_NAMES: [&str; 3] = ["Draft", "Normal", "Quality"];
+const MODES: [GenerationMode; 4] =
+    [GenerationMode::Fill, GenerationMode::Add, GenerationMode::Remove, GenerationMode::Expand];
+const MODE_NAMES: [&str; 4] = ["Fill", "Add", "Remove", "Expand"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum View {
@@ -79,6 +82,11 @@ pub struct GenerationUi {
     seed_text: String,
     count: u32,
     resolution: GenerationResolution,
+    /// The selection as the form last found it, the mode picked (none: the guess), and the box the
+    /// pick belongs to (a new selection guesses again).
+    selection: Option<SelectionInfo>,
+    selection_area: Option<(u32, u32, u32, u32)>,
+    mode: Option<GenerationMode>,
     address: String,
     state: GenerationState,
     server: ServerStatus,
@@ -123,6 +131,9 @@ impl GenerationUi {
             seed_text: String::new(),
             count: 1,
             resolution,
+            selection: None,
+            selection_area: None,
+            mode: None,
             state: GenerationState::default(),
             server,
             thumbnails: HashMap::new(),
@@ -179,6 +190,12 @@ impl GenerationUi {
         let screen = ctx.content_rect();
         let (left, arrow_x) = panel::place(ctx, WIDTH, button.center().x);
         let top = screen.top() + pc::BAR_HEIGHT;
+        self.selection = self.generation.selection(session);
+        let area = self.selection.map(|s| (s.x, s.y, s.width, s.height));
+        if area != self.selection_area {
+            self.selection_area = area;
+            self.mode = None;
+        }
         let content = match (self.view, self.server.connection) {
             (View::Server, _) => self.server_height(),
             (View::Form, ServerConnection::NotSet) => 230.0,
@@ -201,7 +218,8 @@ impl GenerationUi {
 
     fn form_height(&self) -> f32 {
         let error = if self.state.error.is_some() { 40.0 } else { 0.0 };
-        56.0 + 22.0 + 84.0 + 22.0 + 90.0 + 54.0 + 52.0 + 22.0 + 46.0 + 24.0 + 60.0 + error + PAD
+        let selection = if self.selection.is_some() { 70.0 } else { 0.0 };
+        56.0 + 22.0 + 84.0 + 22.0 + 90.0 + selection + 54.0 + 52.0 + 22.0 + 46.0 + 24.0 + 60.0 + error + PAD
     }
 
     fn server_height(&self) -> f32 {
@@ -320,6 +338,31 @@ impl GenerationUi {
         let response = edit.show(&mut ui.new_child(UiBuilder::new().max_rect(inner))).response;
         let enter = response.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         y += 90.0;
+        // the selection's mode, the guessed one until the user picks another
+        if let Some(selection) = self.selection {
+            let chosen = self.mode.unwrap_or(selection.mode);
+            label(ui, pos2(left + 2.0, y), "SELECTION");
+            y += 22.0;
+            let seg = Rect::from_min_max(pos2(left, y), pos2(right, y + 40.0));
+            ui.painter().rect_filled(seg, 12.0, argb(ROW));
+            let cell_w = (seg.width() - 6.0) / MODES.len() as f32;
+            for (i, (&mode, name)) in MODES.iter().zip(MODE_NAMES).enumerate() {
+                let cell = Rect::from_min_max(
+                    pos2(seg.left() + 3.0 + i as f32 * cell_w, seg.top() + 3.0),
+                    pos2(seg.left() + 3.0 + (i + 1) as f32 * cell_w - 2.0, seg.bottom() - 3.0),
+                );
+                let on = chosen == mode;
+                if on {
+                    ui.painter().rect_filled(cell, 9.0, argb(pc::ACCENT));
+                }
+                let ink = if on { Color32::WHITE } else { argb(DIM) };
+                text(ui.painter(), cell.center(), Align2::CENTER_CENTER, name, 14.0, Weight::Medium, ink);
+                if ui.interact(cell, ui.scope_id().with(("mode", i)), Sense::click()).clicked() {
+                    self.mode = Some(mode);
+                }
+            }
+            y += 48.0;
+        }
         // strength
         let value = if self.strength >= 1.0 {
             "New image".to_owned()
@@ -432,7 +475,9 @@ impl GenerationUi {
         // Generate, or Cancel while a run goes
         let go = Rect::from_min_max(pos2(left, y), pos2(right, y + 48.0));
         let running = self.state.running.as_ref();
-        let ready = self.server.connection == ServerConnection::Connected && !styles.is_empty();
+        let add_waiting = self.selection.is_some_and(|s| self.mode.unwrap_or(s.mode) == GenerationMode::Add)
+            && self.prompt.trim().is_empty();
+        let ready = self.server.connection == ServerConnection::Connected && !styles.is_empty() && !add_waiting;
         let words = match running {
             Some(r) => format!("Cancel · {:.0}%", r.progress * 100.0),
             None if self.count > 1 => format!("Generate {}", self.count),
@@ -472,6 +517,7 @@ impl GenerationUi {
             seed: seed.or(self.seed),
             count: self.count,
             resolution: Some(self.resolution),
+            mode: self.mode,
         };
         match self.generation.generate(session, run.clone()) {
             Ok(_) => self.last = Some(run),

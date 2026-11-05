@@ -683,7 +683,15 @@ impl Interface {
             self.actions_panel.closed();
         }
         self.transform.show(&ctx, &mut self.look, session, &mut backdrops);
-        self.selection.show(&ctx, &mut self.look, session, pc::BAR_HEIGHT);
+        let generate_selection = self.selection.show(&ctx, &mut self.look, session, pc::BAR_HEIGHT);
+        #[cfg(feature = "generation")]
+        if generate_selection {
+            // the selection stays; the tool closes so the results bar is there while it runs
+            self.selection.close(session);
+            self.open = Some(Popover::Generate);
+        }
+        #[cfg(not(feature = "generation"))]
+        let _ = generate_selection;
         // the results bar, out of the way of the modes' own bars
         #[cfg(feature = "generation")]
         if !self.transform.on && !self.selection.on && session.adjustment_shown().adjustment.is_none() {
