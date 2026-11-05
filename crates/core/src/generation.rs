@@ -946,7 +946,8 @@ impl Generation {
         let trimmed = trim_results(artwork);
         if trimmed && artwork.shown.is_some_and(|id| !artwork.results.iter().any(|k| k.id == id)) {
             if let Some(shared) = artwork.shared.as_ref().and_then(std::sync::Weak::upgrade) {
-                CanvasSession { shared }.set_overlay(None);
+                // on the shared state: a CanvasSession made here would detach the window when dropped
+                set_overlay(&shared, None);
             }
             artwork.shown = None;
         }
@@ -1644,9 +1645,55 @@ fn add_extracted(
 ) -> Result<u64, String> {
     let shared = shared.and_then(std::sync::Weak::upgrade).ok_or_else(|| "the canvas is closed".to_owned())?;
     let pixels = extracted_pixels(lines, mask);
-    CanvasSession { shared }
-        .add_control_from_picture(area, &pixels, &extract.name, extract.kind)
+    // on the artwork's shared state itself: a CanvasSession made here would detach the window
+    // when dropped, and the canvas would stop drawing
+    add_control_from_picture(&shared, area, &pixels, &extract.name, extract.kind)
         .ok_or_else(|| "No room for another layer".to_owned())
+}
+
+/// Shows `overlay` (an area and its premultiplied pixels) over `shared`'s canvas, or nothing.
+fn set_overlay(shared: &crate::Shared, overlay: Option<(IRect, &[u8])>) {
+    let mut guard = shared.lock();
+    let st = &mut *guard;
+    let (Some(canvas), Some(gpu)) = (st.canvas.as_mut(), st.gpu.as_ref()) else { return };
+    if overlay.is_none() && !canvas.has_overlay() {
+        return;
+    }
+    if let Err(e) = canvas.set_overlay(gpu, overlay) {
+        log::warn!("generation: no overlay: {e}");
+    }
+    shared.frame(st);
+}
+
+/// A new control layer of `kind` named `name`, just above the current layer, holding `pixels`
+/// (premultiplied, `area`'s size) at `area`, as one undo step; its id.
+fn add_control_from_picture(
+    shared: &crate::Shared,
+    area: IRect,
+    pixels: &[u8],
+    name: &str,
+    kind: LayerControl,
+) -> Option<u64> {
+    let mut guard = shared.lock();
+    let st = &mut *guard;
+    st.finish_stroke();
+    st.settle();
+    let before = st.doc.clone();
+    let d = &mut st.doc;
+    if !d.has_room(1) || area.intersect(IRect::from_size(d.width(), d.height())) != area {
+        return None;
+    }
+    let id = d.add_layer();
+    d.rename(id, name);
+    d.set_control(id, Some(kind.into()));
+    if let (Some(canvas), Some(gpu)) = (st.canvas.as_mut(), st.gpu.as_ref()) {
+        canvas.name_next_step("control layer from picture");
+        canvas.record_document(before);
+        canvas.upload_layer_part(gpu, id, area, pixels).ok()?;
+    }
+    st.revision += 1;
+    shared.frame(st);
+    Some(id.0)
 }
 
 /// Whether a selection is mostly transparent pixels at the canvas edge (then Expand), else Fill.
@@ -1834,40 +1881,9 @@ impl CanvasSession {
         Ok(scaled_to_cap(cropped.flattened([255, 255, 255])))
     }
 
-    /// A new layer just above the current one holding `pixels` (premultiplied, `area`'s size) at
-    /// `area`, named `name` and a control layer of `kind`, as one undo step; its id.
-    fn add_control_from_picture(&self, area: IRect, pixels: &[u8], name: &str, kind: LayerControl) -> Option<u64> {
-        let id = self.change("control layer from picture", |d| {
-            if !d.has_room(1) || area.intersect(IRect::from_size(d.width(), d.height())) != area {
-                return None;
-            }
-            let id = d.add_layer();
-            d.rename(id, name);
-            d.set_control(id, Some(kind.into()));
-            Some(id.0)
-        })?;
-        let mut guard = self.shared.lock();
-        let st = &mut *guard;
-        if let (Some(canvas), Some(gpu)) = (st.canvas.as_mut(), st.gpu.as_ref()) {
-            canvas.upload_layer_part(gpu, LayerId(id), area, pixels).ok()?;
-        }
-        st.revision += 1;
-        self.shared.frame(st);
-        Some(id)
-    }
-
     /// Shows `overlay` (an area and its premultiplied pixels) over the canvas, or nothing.
     fn set_overlay(&self, overlay: Option<(IRect, &[u8])>) {
-        let mut guard = self.shared.lock();
-        let st = &mut *guard;
-        let (Some(canvas), Some(gpu)) = (st.canvas.as_mut(), st.gpu.as_ref()) else { return };
-        if overlay.is_none() && !canvas.has_overlay() {
-            return;
-        }
-        if let Err(e) = canvas.set_overlay(gpu, overlay) {
-            log::warn!("generation: no overlay: {e}");
-        }
-        self.shared.frame(st);
+        set_overlay(&self.shared, overlay);
     }
 
     /// A new layer at the top of the stack holding `pixels` (premultiplied, `area`'s size) at
@@ -1973,14 +1989,14 @@ mod tests {
         s.change("current", |d| d.set_current(lower).then_some(()));
         let lines = Picture::new(2, 2, vec![255; 16]).unwrap();
         let pixels = extracted_pixels(&lines, None);
-        let id = s
-            .add_control_from_picture(
-                IRect::from_size(2, 2),
-                &pixels,
-                control_layer_name(LayerControl::LineArt),
-                LayerControl::LineArt,
-            )
-            .unwrap();
+        let id = add_control_from_picture(
+            &s.shared,
+            IRect::from_size(2, 2),
+            &pixels,
+            control_layer_name(LayerControl::LineArt),
+            LayerControl::LineArt,
+        )
+        .unwrap();
         {
             let st = s.shared.lock();
             let members = st.doc.members(None);
