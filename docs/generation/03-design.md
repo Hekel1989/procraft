@@ -419,8 +419,37 @@ context box):
    then round each side to a multiple of 16, each side between 512 and 2048.
 3. **Back to the canvas**: results are scaled to `W × H` (Lanczos) and placed at the box's position.
 4. **Big areas** (box > 2 MP, e.g. a full 4K canvas): generated at 1 MP and scaled up, which softens
-   detail. Phase 1 accepts this and says so in the results bar ("generated at 1024 × 768, scaled up");
-   a proper upscale/refine pass is Phase 2 (upscaling).
+   detail. *(This was M2's behaviour; replaced by B7a, to be built at the start of M3.)*
+
+### B7a. Generation resolution (decided 2026-11-05, to build at the start of M3)
+
+The area's **target size** is chosen in the popover; the model reaches it in one or two passes, as
+krita-ai-diffusion does (`backend/resolution.py`: canvas size × a multiplier, capped, and two
+passes when the target is much bigger than the model's size).
+
+**A "Resolution" row in the Generate popover**, three choices in the count's style:
+
+| Choice | Target size | How |
+|---|---|---|
+| **Draft** | the model's own size (≈ 1 MP, shape kept) | one pass, scaled to the area: fast, soft on big canvases (M2's behaviour) |
+| **Normal** | half the area's size each way (at least the model's size) | one pass if it's near the model's size, else two |
+| **Quality** (default) | the area's own size | one pass if it's near the model's size, else two |
+
+- **Two passes** when the target is more than about 1.5 × the model's pixels: compose at ≈ 1 MP,
+  scale that up to the target, then refine at the target size with a low denoise (≈ 0.35–0.45, to
+  tune for Anima), same prompt, seed and style. Results are then scaled to the area if the target
+  was smaller (Normal) or capped.
+- **Small text under the row** says what will happen, e.g. "2800 × 2000 · 2 passes",
+  "1400 × 1000 · 2 passes", "1216 × 864 → scaled up", or "capped at 6 MP".
+- **The cap: "Largest picture"** in the server view, in megapixels, filled in from the GPU's memory
+  as the server reports it (24 GB → 6 MP, 16 GB → 4, 12 GB → 3, 8 GB or less → 2) and changeable.
+  A target above it is generated at the cap and scaled up.
+- **Remembered** with the app's other generation settings; **Quality** at first.
+- **Selections**: the same, with the context box as the area.
+- **The results bar** notes when a result was scaled up by more than 1.5 × ("scaled up from
+  1216 × 864"), the note M2 left out.
+- Expected cost on a 24 GB GPU for 2800 × 2000 with the Anima style: Draft ≈ 9 s; Quality roughly
+  25–40 s (to measure when built); Anima Turbo much less.
 
 ## B8. Previews on the canvas
 
