@@ -209,7 +209,7 @@ object GenerationUi {
 
     /** The top bar's Generate button: lit while its popover is open, ringed while a run goes. */
     @Composable
-    fun BarButton(vm: CanvasViewModel) {
+    fun BarButton(vm: CanvasViewModel, width: Dp) {
         val g = generation(LocalContext.current)
         refreshLayers = { vm.refresh() }
         // the run and the server looked at often while something is under way, else now and then
@@ -221,7 +221,7 @@ object GenerationUi {
             }
         }
         Box(contentAlignment = Alignment.Center) {
-            ActionButton(Icon, "Generate", selected = vm.panel == Panel.GENERATE, glyph = 40.dp) { vm.toggle(Panel.GENERATE) }
+            ActionButton(Icon, "Generate", width, selected = vm.panel == Panel.GENERATE, glyph = 40.dp) { vm.toggle(Panel.GENERATE) }
             state.running?.let { ProgressRing(it.progress, Modifier.size(Pc.ActionDiscSize + 5.dp)) }
         }
     }
