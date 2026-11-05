@@ -93,6 +93,13 @@ impl Family {
         }
     }
 
+    /// The most pixels it makes a picture at, in megapixels, whatever the GPU could take.
+    pub fn most_megapixels(self) -> f32 {
+        match self {
+            Family::Anima => anima::MOST_MEGAPIXELS,
+        }
+    }
+
     /// The pixel count it generates best at.
     pub fn native_pixels(self) -> u32 {
         match self {

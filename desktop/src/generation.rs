@@ -469,7 +469,7 @@ impl GenerationUi {
         }
         y += 46.0;
         let info = self.generation.size_for(session, self.resolution);
-        let detail = plan_text(&info, self.largest());
+        let detail = plan_text(&info);
         text(ui.painter(), pos2(left + 2.0, y), Align2::LEFT_TOP, &detail, 12.0, Weight::Regular, argb(DIM));
         y += 24.0;
         // Generate, or Cancel while a run goes
@@ -963,7 +963,7 @@ fn texture(ctx: &egui::Context, name: &str, image: &ThumbnailImage) -> TextureHa
 }
 
 /// The small text under the resolution row: what will be made, and how.
-fn plan_text(size: &SizeInfo, largest: f32) -> String {
+fn plan_text(size: &SizeInfo) -> String {
     let mut words = format!("{} × {}", size.width, size.height);
     if size.passes > 1 {
         words.push_str(&format!(" · {} passes", size.passes));
@@ -973,7 +973,7 @@ fn plan_text(size: &SizeInfo, largest: f32) -> String {
         words.push_str(" · 1 pass");
     }
     if size.capped {
-        words.push_str(&format!(" · capped at {} MP", megapixels(largest)));
+        words.push_str(&format!(" · capped at {} MP", megapixels(size.largest_megapixels)));
     }
     words
 }

@@ -231,7 +231,7 @@ pub struct ResultInfo {
 
 /// What a resolution makes for the open artwork: the target size, the passes, and the size
 /// results are generated at before the final scale to the area.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Record)]
+#[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
 pub struct SizeInfo {
     /// The target size after the largest-picture cap.
     pub width: u32,
@@ -244,6 +244,9 @@ pub struct SizeInfo {
     /// The size actually generated (the last pass).
     pub from_width: u32,
     pub from_height: u32,
+    /// The cap in force, in megapixels: the Largest picture setting or the model's own limit.
+    #[uniffi(default = 0.0)]
+    pub largest_megapixels: f32,
 }
 
 /// The selection a run would use: its context box on the canvas and the mode guessed for it.
@@ -447,14 +450,9 @@ impl Generation {
         };
         // A selection is one pass at the target (see the worker): its second pass would have to
         // repeat the whole inpaint structure.
-        let plan = plan_for(
-            width,
-            height,
-            procraft_diffusion::Family::Anima.native_pixels(),
-            resolution.into(),
-            self.largest_megapixels(&server),
-            selection.is_some(),
-        );
+        let family = procraft_diffusion::Family::Anima;
+        let largest = self.largest_megapixels(&server).min(family.most_megapixels());
+        let plan = plan_for(width, height, family.native_pixels(), resolution.into(), largest, selection.is_some());
         SizeInfo {
             width: plan.target.width,
             height: plan.target.height,
@@ -463,6 +461,7 @@ impl Generation {
             scaled_up: plan.stretched(width, height, SCALED_UP),
             from_width: plan.size.width,
             from_height: plan.size.height,
+            largest_megapixels: largest,
         }
     }
 
@@ -983,10 +982,12 @@ mod tests {
         let settings = GenerationSettings { address: String::new(), nsfw: false, largest_megapixels: Some(6.0) };
         let generation = Generation::new(settings);
         let quality = generation.size_for(&session, GenerationResolution::Quality);
-        assert_eq!((quality.width, quality.height), (2800, 2000));
+        // Anima's own limit (3 MP) caps it below the 6 MP setting
+        assert_eq!((quality.width, quality.height), (2048, 1456));
         assert_eq!(quality.passes, 2);
-        assert_eq!((quality.from_width, quality.from_height), (2800, 2000));
-        assert!(!quality.capped);
+        assert_eq!((quality.from_width, quality.from_height), (2048, 1456));
+        assert!(quality.capped);
+        assert_eq!(quality.largest_megapixels, 3.0);
         let normal = generation.size_for(&session, GenerationResolution::Normal);
         assert_eq!((normal.width, normal.height), (1400, 1000));
         assert_eq!(normal.passes, 1, "near the model's size: one pass");
@@ -1002,7 +1003,7 @@ mod tests {
         assert!(capped.capped);
         assert_eq!(capped.width % 16, 0);
         assert_eq!(capped.height % 16, 0);
-        assert!(u64::from(capped.width) * u64::from(capped.height) <= 6_000_000);
+        assert!(u64::from(capped.width) * u64::from(capped.height) <= 3_000_000);
     }
 
     #[test]

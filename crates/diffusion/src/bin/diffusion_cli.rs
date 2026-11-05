@@ -195,7 +195,7 @@ fn generate(worker: &Worker, server: &ServerState, prompt: &str, args: &[String]
         return Err("only Anima so far".to_owned());
     }
     let vram = server.stats.as_ref().and_then(|s| s.gpu.as_ref()).map_or(0, |(_, bytes)| *bytes);
-    let largest = request.largest.unwrap_or_else(|| largest_for_vram(vram));
+    let largest = request.largest.unwrap_or_else(|| largest_for_vram(vram)).min(request.style.family.most_megapixels());
     let one_pass = !request.is_new() || request.selection.is_some();
     let plan = plan_for(size.0, size.1, request.style.family.native_pixels(), request.resolution, largest, one_pass);
     print_plan(&plan);

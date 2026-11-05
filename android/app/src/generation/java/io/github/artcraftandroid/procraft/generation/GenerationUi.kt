@@ -336,7 +336,7 @@ object GenerationUi {
             }
             vm.session?.let { session ->
                 val size = g.sizeFor(session, resolution)
-                Text(planText(size, server?.largestMegapixels ?: 0f), color = Dim, fontSize = 12.sp, modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 4.dp))
+                Text(planText(size), color = Dim, fontSize = 12.sp, modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 4.dp))
             }
         }
         Column(Modifier.padding(bottom = 16.dp)) {
@@ -465,14 +465,14 @@ object GenerationUi {
     }
 
     /** The small text under the resolution row: what will be made, and how. */
-    private fun planText(size: SizeInfo, largest: Float): String {
+    private fun planText(size: SizeInfo): String {
         var words = "${size.width} × ${size.height}"
         words += when {
             size.passes > 1u -> " · ${size.passes} passes"
             size.scaledUp -> " → scaled up"
             else -> " · 1 pass"
         }
-        if (size.capped) words += " · capped at ${megapixels(largest)} MP"
+        if (size.capped) words += " · capped at ${megapixels(size.largestMegapixels)} MP"
         return words
     }
 

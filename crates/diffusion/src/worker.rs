@@ -370,7 +370,7 @@ fn run(
     }
     let (width, height) = request.size;
     let vram = on.shared.inner.lock().server.stats.as_ref().and_then(|s| s.gpu.as_ref()).map_or(0, |(_, bytes)| *bytes);
-    let largest = request.largest.unwrap_or_else(|| largest_for_vram(vram));
+    let largest = request.largest.unwrap_or_else(|| largest_for_vram(vram)).min(family.most_megapixels());
     // Selections are one pass at the target: a second pass would have to repeat the whole inpaint
     // structure. The refine plan is exactly one pass at the target, never below the model's size.
     let one_pass = !request.is_new() || request.selection.is_some();

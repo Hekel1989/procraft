@@ -13,7 +13,10 @@ use crate::{Error, Family, Graph, Out, Picture, Request, SelectionMode};
 pub(super) const NATIVE_PIXELS: u32 = 1024 * 1024;
 /// How much the second pass of a two-pass picture changes it: enough to add detail, too little to
 /// invent a new composition.
-pub(super) const SECOND_PASS_DENOISE: f64 = 0.4;
+pub(super) const SECOND_PASS_DENOISE: f64 = 0.3;
+/// The most pixels a pass is made at, in megapixels: past about 3 MP Anima's pictures go soft and
+/// show a faint grid (tried at 5.6 MP on 2800 × 2000), so bigger targets are scaled up the rest.
+pub(super) const MOST_MEGAPIXELS: f32 = 3.0;
 /// The inpaint control's strength: the LLLite layer follows the mask whole.
 pub(super) const INPAINT_CONTROL_STRENGTH: f64 = 1.0;
 /// How much the last colour match pulls a selection's result towards the original: enough to blend
