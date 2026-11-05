@@ -825,6 +825,23 @@ impl Generation {
         layer
     }
 
+    /// Deletes result `result` (hidden first if it's shown), from the bar and from the artwork's
+    /// folder: for the pictures nobody wants to keep.
+    pub fn delete_result(&self, session: &CanvasSession, result: u64) {
+        let mut artwork = self.artwork_of(session);
+        if artwork.shown == Some(result) {
+            session.set_overlay(None);
+            artwork.shown = None;
+        }
+        let before = artwork.results.len();
+        artwork.results.retain(|kept| kept.id != result);
+        if artwork.results.len() != before
+            && let Some(folder) = artwork.folder.clone()
+        {
+            self.save_results(&folder, &artwork);
+        }
+    }
+
     /// Drops the results (and the one shown), deleting them from the artwork's folder; a run
     /// going carries on.
     pub fn discard_results(&self, session: &CanvasSession) {
@@ -2017,6 +2034,30 @@ mod tests {
         generation.discard_results(&s);
         drop(generation);
         assert!(!dir.exists(), "the results and their index go");
+        let _ = fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn deleting_a_result_takes_it_from_the_bar_and_the_folder() {
+        let folder = temp_folder("delete");
+        let s = CanvasSession::new(8, 8);
+        let generation = Generation::new(settings());
+        generation.set_folder(&s, folder.to_string_lossy().into_owned());
+        wait_loaded(&generation);
+        generation.artwork_of(&s).results.push(kept_result(3, 8));
+        generation.artwork_of(&s).results.push(kept_result(4, 8));
+        generation.save_results(&folder, &generation.artwork_of(&s));
+        let dir = folder.join(RESULTS_DIR);
+        wait_index(&dir, 2);
+        generation.show_result(&s, Some(3));
+        generation.delete_result(&s, 3);
+        let state = generation.state();
+        assert_eq!(state.results.iter().map(|r| r.id).collect::<Vec<_>>(), vec![4]);
+        assert_eq!(state.shown, None, "the one shown is hidden");
+        wait_index(&dir, 1);
+        drop(generation);
+        assert!(!dir.join("3.png").exists() && !dir.join("3.thumb.png").exists(), "its files go");
+        assert!(dir.join("4.png").is_file(), "the others stay");
         let _ = fs::remove_dir_all(&folder);
     }
 

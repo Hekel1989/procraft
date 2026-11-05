@@ -113,6 +113,11 @@ ProCraft's margins:
   sends previews, §B6).
 - **Tap a thumbnail** to show it on the canvas (a preview drawn over the canvas, masked to the
   selection when there was one). **Tap it again** to hide it and compare with the original.
+- **Press and hold a thumbnail** (desktop: hold or right-click) for a small red **Delete** above
+  it: that result goes from the bar and from the artwork's folder, for the pictures nobody wants.
+  Tapping elsewhere dismisses it. *(Added 2026-11-05.)*
+- **More results than fit** scroll: on Android by swiping the thumbnails, with a fade and ‹ when
+  older ones are off to the left; on desktop with ‹ and › or the mouse wheel.
 - **Apply** adds the shown result as a **new layer at the top of the stack**, named
   "Generated · <first words of the prompt>", masked to the selection (with its feather) if there
   was one. One undo step ("Generate"). The bar stays, so another result can be applied too.

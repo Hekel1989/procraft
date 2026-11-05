@@ -47,6 +47,8 @@ const BAD: u32 = 0xFFE84F51;
 const THUMB: f32 = 66.0;
 /// The results bar's ‹ and › when it's scrolled.
 const CHEVRON: f32 = 24.0;
+/// How long a thumbnail is held, in seconds, before its Delete shows.
+const HOLD: f64 = 0.5;
 /// How often the run and the server are looked at while something is under way.
 const POLL: Duration = Duration::from_millis(100);
 /// The resolution choices, in the row's order.
@@ -96,6 +98,8 @@ pub struct GenerationUi {
     preview: Option<(u64, TextureHandle)>,
     /// How many results the bar is scrolled back from the newest.
     back: usize,
+    /// The result held down (or right-clicked), showing its Delete above it.
+    deleting: Option<u64>,
     /// The last run's settings, for Again.
     last: Option<RunSettings>,
 }
@@ -143,6 +147,7 @@ impl GenerationUi {
             thumbnails: HashMap::new(),
             preview: None,
             back: 0,
+            deleting: None,
             last: None,
         }
     }
@@ -858,9 +863,45 @@ impl GenerationUi {
                         egui::StrokeKind::Outside,
                     );
                 }
-                if ui.interact(cell, ui.scope_id().with(("result", r.id)), Sense::click()).clicked() {
+                let response = ui.interact(cell, ui.scope_id().with(("result", r.id)), Sense::click());
+                // held (half a second) or right-clicked: a small Delete above it
+                let held = response.is_pointer_button_down_on()
+                    && ui.input(|i| i.pointer.press_start_time().is_some_and(|t| i.time - t > HOLD));
+                if response.is_pointer_button_down_on() && !held {
+                    // a still press makes no events: look again soon so the hold is noticed
+                    ui.ctx().request_repaint_after(Duration::from_millis(50));
+                }
+                if held || response.secondary_clicked() || response.long_touched() {
+                    self.deleting = Some(r.id);
+                } else if response.clicked() && self.deleting != Some(r.id) {
                     let next = if shown == Some(r.id) { None } else { Some(r.id) };
                     self.generation.show_result(session, next);
+                }
+                if self.deleting == Some(r.id) {
+                    let bubble = Rect::from_center_size(pos2(cell.center().x, cell.top() - 34.0), vec2(76.0, 32.0));
+                    ui.painter().rect_filled(bubble, 10.0, argb(BAD));
+                    text(
+                        ui.painter(),
+                        bubble.center(),
+                        Align2::CENTER_CENTER,
+                        "Delete",
+                        14.0,
+                        Weight::Medium,
+                        Color32::WHITE,
+                    );
+                    let tapped = ui.interact(bubble, ui.scope_id().with(("delete", r.id)), Sense::click()).clicked();
+                    if tapped {
+                        self.generation.delete_result(session, r.id);
+                        self.thumbnails.remove(&r.id);
+                        self.deleting = None;
+                    } else if !held
+                        && ui.input(|i| i.pointer.any_pressed())
+                        && !ui
+                            .input(|i| i.pointer.interact_pos())
+                            .is_some_and(|p| bubble.contains(p) || cell.contains(p))
+                    {
+                        self.deleting = None;
+                    }
                 }
                 x += THUMB + 10.0;
             }

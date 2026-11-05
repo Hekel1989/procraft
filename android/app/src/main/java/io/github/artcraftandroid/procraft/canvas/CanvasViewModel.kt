@@ -2285,6 +2285,8 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
         // kept saved by the core, a few seconds after it changes, once nothing is under way that
         // saving would cut short (only the layers that changed are written); a failure told
         s.startAutosave(dir.path)
+        // image generation's results for this artwork are kept in its folder too
+        io.github.artcraftandroid.procraft.generation.GenerationUi.opened(s, dir.path)
         viewModelScope.launch(Dispatchers.IO) {
             while (session === s) {
                 kotlinx.coroutines.delay(SAVE_FAILURE_POLL_MS)

@@ -7,6 +7,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -74,6 +76,7 @@ import io.github.artcraftandroid.procraft.core.GenerationException
 import io.github.artcraftandroid.procraft.core.GenerationSettings
 import io.github.artcraftandroid.procraft.core.GenerationState
 import io.github.artcraftandroid.procraft.core.RunSettings
+import io.github.artcraftandroid.procraft.core.CanvasSession
 import io.github.artcraftandroid.procraft.core.GenerationResolution
 import io.github.artcraftandroid.procraft.core.GenerationMode
 import io.github.artcraftandroid.procraft.core.SelectionInfo
@@ -135,6 +138,8 @@ object GenerationUi {
     // the selection's mode as picked (none: the guess), and the selection it was picked for
     private var mode by mutableStateOf<GenerationMode?>(null)
     private var modeFor: SelectionInfo? = null
+    // the result held down, showing its Delete
+    private var deleting by mutableStateOf<ULong?>(null)
     private var address by mutableStateOf("")
     private var state by mutableStateOf(GenerationState(null, emptyList(), null, null))
     private var server by mutableStateOf<ServerStatus?>(null)
@@ -151,7 +156,10 @@ object GenerationUi {
         settings = GenerationSettings(p.getString("address", "") ?: "", p.getBoolean("nsfw", false), largest)
         resolution = GenerationResolution.entries.firstOrNull { it.name == p.getString("resolution", null) } ?: GenerationResolution.QUALITY
         address = settings.address
-        Generation(settings).also { generation = it }
+        Generation(settings).also { g ->
+            generation = g
+            opened?.let { (s, f) -> g.setFolder(s, f) }
+        }
     }
 
     private fun keep(context: Context) {
@@ -206,6 +214,15 @@ object GenerationUi {
             vm.closeSelecting()
             if (vm.panel != Panel.GENERATE) vm.toggle(Panel.GENERATE)
         }
+    }
+
+    /** The artwork just opened and its folder, where its results are kept. */
+    private var opened: Pair<CanvasSession, String>? = null
+
+    /** An artwork opened (or was made) in `folder`: its results, kept there, come back. */
+    fun opened(session: CanvasSession, folder: String) {
+        opened = session to folder
+        generation?.setFolder(session, folder)
     }
 
     /** Opens the server view (from the Prefs tab). */
@@ -548,6 +565,7 @@ object GenerationUi {
     private fun hasResults() = state.running != null || state.results.isNotEmpty() || state.error != null
 
     /** The bar at the foot of the screen: the results, the run going, Again and Apply. */
+    @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
     @Composable
     fun ResultsBar(vm: CanvasViewModel, modifier: Modifier) {
         if (!hasResults()) return
@@ -567,12 +585,34 @@ object GenerationUi {
                 for (r in state.results) {
                     val bitmap = bitmaps[r.id] ?: continue
                     val shape = RoundedCornerShape(10.dp)
-                    Image(
-                        bitmap, "Result", contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(66.dp).clip(shape)
-                            .then(if (shown == r.id) Modifier.border(2.5.dp, Pc.Accent, shape) else Modifier)
-                            .tap { g.showResult(session, if (shown == r.id) null else r.id) },
-                    )
+                    Box {
+                        Image(
+                            bitmap, "Result", contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(66.dp).clip(shape)
+                                .then(if (shown == r.id) Modifier.border(2.5.dp, Pc.Accent, shape) else Modifier)
+                                .combinedClickable(
+                                    remember { MutableInteractionSource() }, indication = null,
+                                    onLongClick = { deleting = r.id },
+                                    onClick = { g.showResult(session, if (shown == r.id) null else r.id) },
+                                ),
+                        )
+                        // held: a small Delete above it, for the pictures nobody wants
+                        if (deleting == r.id) {
+                            val up = with(LocalDensity.current) { 48.dp.roundToPx() }
+                            androidx.compose.ui.window.Popup(
+                                alignment = Alignment.TopCenter,
+                                offset = androidx.compose.ui.unit.IntOffset(0, -up),
+                                onDismissRequest = { deleting = null },
+                                properties = androidx.compose.ui.window.PopupProperties(focusable = true),
+                            ) {
+                                Box(
+                                    Modifier.clip(RoundedCornerShape(10.dp)).background(Color(0xFFE84F51))
+                                        .tap { g.deleteResult(session, r.id); deleting = null; bitmaps.remove(r.id); poll(g) }
+                                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                                ) { Text("Delete", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
+                            }
+                        }
+                    }
                 }
                 state.running?.let { run ->
                     Box(Modifier.size(66.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF2A2A2A)).tap { g.cancel() }, contentAlignment = Alignment.Center) {

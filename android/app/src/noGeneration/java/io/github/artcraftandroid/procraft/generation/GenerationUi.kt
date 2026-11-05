@@ -15,6 +15,8 @@ object GenerationUi {
     @Composable
     fun SelectionButton(vm: CanvasViewModel, width: Dp) = Unit
 
+    fun opened(session: io.github.artcraftandroid.procraft.core.CanvasSession, folder: String) = Unit
+
     fun openServer() = Unit
 
     fun leave(vm: CanvasViewModel) = Unit

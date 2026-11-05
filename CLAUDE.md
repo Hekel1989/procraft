@@ -93,9 +93,12 @@ Package `io.github.artcraftandroid.procraft.debug`. Install with
   resolution Draft/Normal/Quality, selections Fill/Add/Remove/Expand, Selection-toolbar button).
 - **Next:** M4 (control layers, tag autocomplete), M5 (the companion CLI).
 - **After Phase 1:** style editing.
-- **Open bugs:** results kept with the artwork across closing it (in progress); the popover's
-  prompt, style and count aren't remembered across app restarts; the user has seen a few more
-  small bugs on both platforms that aren't listed yet.
+- **Since M3:** results are kept with their artwork in its private `generation/` folder (the
+  newest 24; thumbnails in memory, full pictures on disk, read when shown or applied). Holding a
+  thumbnail gives a Delete. The server shows as a button in the popover's title. The results bar
+  scrolls.
+- **Open:** the popover's prompt, style and count aren't remembered across app restarts. The
+  user has seen a few more small bugs on both platforms that aren't listed yet.
 
 ## Working with DeepSeek (optional)
 
