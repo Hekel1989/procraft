@@ -16,7 +16,10 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
-use procraft_diffusion::{Address, Connection, Feature, Picture, Request, RunId, Worker};
+use procraft_diffusion::{
+    Address, Connection, Feature, Picture, Request, Resolution as PlanResolution, RunId, Worker, largest_for_vram,
+    plan_for,
+};
 use procraft_engine::cms::{Lut, builtin};
 use procraft_engine::document::{Document, LayerId};
 use procraft_engine::geom::IRect;
@@ -30,12 +33,39 @@ const THUMBNAIL_SIDE: u32 = 160;
 const MOST_PICTURES: u32 = 4;
 /// A generated layer's name keeps this much of the prompt.
 const NAME_PROMPT: usize = 32;
+/// Results made this much smaller than the area are noted as scaled up.
+const SCALED_UP: f64 = 1.5;
 
-/// The app-wide settings: the server's address as typed (empty: none) and whether NSFW is allowed.
-#[derive(Clone, Debug, Default, PartialEq, Eq, uniffi::Record)]
+/// The app-wide settings: the server's address as typed (empty: none), whether NSFW is allowed,
+/// and the largest picture in megapixels (none: from the server's GPU memory).
+#[derive(Clone, Debug, Default, PartialEq, uniffi::Record)]
 pub struct GenerationSettings {
     pub address: String,
     pub nsfw: bool,
+    #[uniffi(default = None)]
+    pub largest_megapixels: Option<f32>,
+}
+
+/// How large a picture to make before scaling it to the area.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, uniffi::Enum)]
+pub enum GenerationResolution {
+    /// The model's own size (about 1 MP), scaled to the area after.
+    Draft,
+    /// Half the area's size each way, but never fewer pixels than the model's own size.
+    Normal,
+    /// The area's own size.
+    #[default]
+    Quality,
+}
+
+impl From<GenerationResolution> for PlanResolution {
+    fn from(resolution: GenerationResolution) -> PlanResolution {
+        match resolution {
+            GenerationResolution::Draft => PlanResolution::Draft,
+            GenerationResolution::Normal => PlanResolution::Normal,
+            GenerationResolution::Quality => PlanResolution::Quality,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
@@ -79,7 +109,7 @@ pub struct FeatureStatus {
 }
 
 /// The server as last found.
-#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct ServerStatus {
     pub connection: ServerConnection,
     /// The address in use, as `host:port`; empty when none.
@@ -95,6 +125,12 @@ pub struct ServerStatus {
     pub checkpoints: u32,
     /// The model's licence line, once a checkpoint is found.
     pub licence: String,
+    /// The GPU's memory in bytes, once connected.
+    #[uniffi(default = 0)]
+    pub vram_bytes: u64,
+    /// The largest picture in force, in megapixels: the setting, or the GPU's default.
+    #[uniffi(default = 0.0)]
+    pub largest_megapixels: f32,
 }
 
 /// A style the server can run.
@@ -109,7 +145,8 @@ pub struct StyleInfo {
 }
 
 /// What to run: the prompt, a style's id, the strength (1 makes a new picture, lower refines the
-/// one there is), the seed (none: a random one) and how many pictures (1 to 4).
+/// one there is), the seed (none: a random one), how many pictures (1 to 4) and how large to make
+/// them (none: Quality).
 #[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct RunSettings {
     pub prompt: String,
@@ -117,6 +154,8 @@ pub struct RunSettings {
     pub strength: f32,
     pub seed: Option<u64>,
     pub count: u32,
+    #[uniffi(default = None)]
+    pub resolution: Option<GenerationResolution>,
 }
 
 /// The run going now.
@@ -141,6 +180,29 @@ pub struct ResultInfo {
     pub seed: u64,
     /// Small, premultiplied.
     pub thumbnail: ThumbnailImage,
+    /// The size it was made at, when it's scaled up by more than 1.5× to fill the area; 0 when it
+    /// isn't.
+    #[uniffi(default = 0)]
+    pub scaled_from_width: u32,
+    #[uniffi(default = 0)]
+    pub scaled_from_height: u32,
+}
+
+/// What a resolution makes for the open artwork: the target size, the passes, and the size
+/// results are generated at before the final scale to the area.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct SizeInfo {
+    /// The target size after the largest-picture cap.
+    pub width: u32,
+    pub height: u32,
+    pub passes: u32,
+    /// The target was brought down to the largest picture.
+    pub capped: bool,
+    /// Results are scaled up by more than 1.5× to fill the area.
+    pub scaled_up: bool,
+    /// The size actually generated (the last pass).
+    pub from_width: u32,
+    pub from_height: u32,
 }
 
 /// How generation stands for the open artwork.
@@ -175,6 +237,8 @@ struct Kept {
     area: IRect,
     pixels: Vec<u8>,
     thumbnail: ThumbnailImage,
+    /// The size it was made at when scaled up to the area; 0 × 0 when it wasn't.
+    scaled_from: (u32, u32),
 }
 
 /// The run going, and where its pictures go.
@@ -266,6 +330,7 @@ impl Generation {
             Connection::Connected => (ServerConnection::Connected, None),
             Connection::Failed(e) => (ServerConnection::Failed, Some(e.to_string())),
         };
+        let vram_bytes = server.stats.as_ref().and_then(|s| s.gpu.as_ref()).map_or(0, |(_, bytes)| *bytes);
         ServerStatus {
             connection,
             address: server.address.as_ref().map(ToString::to_string).unwrap_or_default(),
@@ -275,6 +340,34 @@ impl Generation {
             features,
             checkpoints: u32::try_from(checkpoints).unwrap_or(u32::MAX),
             licence: if checkpoints > 0 { family.licence().to_owned() } else { String::new() },
+            vram_bytes,
+            largest_megapixels: self.largest_megapixels(&server),
+        }
+    }
+
+    /// What `resolution` makes of `session`'s area: its target, passes and generated size.
+    pub fn size_for(&self, session: &CanvasSession, resolution: GenerationResolution) -> SizeInfo {
+        let server = self.worker.server();
+        let (width, height) = {
+            let state = session.shared.lock_finished();
+            (state.doc.width(), state.doc.height())
+        };
+        let plan = plan_for(
+            width,
+            height,
+            procraft_diffusion::Family::Anima.native_pixels(),
+            resolution.into(),
+            self.largest_megapixels(&server),
+            false,
+        );
+        SizeInfo {
+            width: plan.target.width,
+            height: plan.target.height,
+            passes: plan.passes(),
+            capped: plan.capped,
+            scaled_up: plan.stretched(width, height, SCALED_UP),
+            from_width: plan.size.width,
+            from_height: plan.size.height,
         }
     }
 
@@ -322,6 +415,8 @@ impl Generation {
             count: run.count.clamp(1, MOST_PICTURES),
             picture: picture.picture,
             size: (picture.width, picture.height),
+            resolution: run.resolution.unwrap_or_default().into(),
+            largest: Some(self.largest_megapixels(&server)),
             nsfw: self.settings.lock().nsfw,
         };
         let name = layer_name(&request.prompt);
@@ -379,7 +474,13 @@ impl Generation {
             results: artwork
                 .results
                 .iter()
-                .map(|k| ResultInfo { id: k.id, seed: k.seed, thumbnail: k.thumbnail.clone() })
+                .map(|k| ResultInfo {
+                    id: k.id,
+                    seed: k.seed,
+                    thumbnail: k.thumbnail.clone(),
+                    scaled_from_width: k.scaled_from.0,
+                    scaled_from_height: k.scaled_from.1,
+                })
                 .collect(),
             shown: artwork.shown,
             error: artwork.error.clone(),
@@ -425,6 +526,15 @@ impl Generation {
 }
 
 impl Generation {
+    /// The largest picture in force: the setting, else the server's GPU memory.
+    fn largest_megapixels(&self, server: &procraft_diffusion::ServerState) -> f32 {
+        let setting = self.settings.lock().largest_megapixels;
+        setting.filter(|mp| mp.is_finite() && *mp > 0.0).unwrap_or_else(|| {
+            let vram = server.stats.as_ref().and_then(|s| s.gpu.as_ref()).map_or(0, |(_, bytes)| *bytes);
+            largest_for_vram(vram)
+        })
+    }
+
     /// The artwork's part for `session`: a fresh one if it was another session's.
     fn artwork_of(&self, session: &CanvasSession) -> parking_lot::MutexGuard<'_, Artwork> {
         let mut artwork = self.artwork.lock();
@@ -469,12 +579,20 @@ fn layer_name(prompt: &str) -> String {
 /// A result as kept: in the canvas's colours, premultiplied, with its thumbnail.
 fn keep(id: u64, result: &procraft_diffusion::RunResult, run: &Running, from_srgb: Option<&Lut>) -> Option<Kept> {
     let area = run.area;
+    let from = result.generated;
     let thumbnail = thumbnail(&result.picture)?;
     let mut pixels = result.picture.rgba.clone();
     if let Some(lut) = from_srgb {
         lut.apply_rgba(&mut pixels, false);
     }
     premultiply(&mut pixels);
+    let scaled_from = if area.width() as f64 / f64::from(from.0.max(1)) > SCALED_UP
+        || area.height() as f64 / f64::from(from.1.max(1)) > SCALED_UP
+    {
+        from
+    } else {
+        (0, 0)
+    };
     (pixels.len() == area.width() as usize * area.height() as usize * 4).then_some(Kept {
         id,
         seed: result.seed,
@@ -482,6 +600,7 @@ fn keep(id: u64, result: &procraft_diffusion::RunResult, run: &Running, from_srg
         area,
         pixels,
         thumbnail,
+        scaled_from,
     })
 }
 
@@ -664,6 +783,34 @@ mod tests {
         assert_eq!(at(&composite(&s), 32, 5, 5), [255, 255, 255, 255], "the overlay isn't in the picture");
         s.set_overlay(None);
         assert!(!s.shared.lock().canvas.as_ref().unwrap().has_overlay());
+    }
+
+    #[test]
+    fn a_size_follows_the_resolution_and_the_cap() {
+        let session = CanvasSession::new(2800, 2000);
+        let settings = GenerationSettings { address: String::new(), nsfw: false, largest_megapixels: Some(6.0) };
+        let generation = Generation::new(settings);
+        let quality = generation.size_for(&session, GenerationResolution::Quality);
+        assert_eq!((quality.width, quality.height), (2800, 2000));
+        assert_eq!(quality.passes, 2);
+        assert_eq!((quality.from_width, quality.from_height), (2800, 2000));
+        assert!(!quality.capped);
+        let normal = generation.size_for(&session, GenerationResolution::Normal);
+        assert_eq!((normal.width, normal.height), (1400, 1000));
+        assert_eq!(normal.passes, 2);
+        assert_eq!((normal.from_width, normal.from_height), (1408, 1008));
+        assert!(normal.scaled_up);
+        let draft = generation.size_for(&session, GenerationResolution::Draft);
+        assert_eq!((draft.width, draft.height), (1216, 864));
+        assert_eq!(draft.passes, 1);
+        assert!(draft.scaled_up);
+
+        let large = CanvasSession::new(4096, 4096);
+        let capped = generation.size_for(&large, GenerationResolution::Quality);
+        assert!(capped.capped);
+        assert_eq!(capped.width % 16, 0);
+        assert_eq!(capped.height % 16, 0);
+        assert!(u64::from(capped.width) * u64::from(capped.height) <= 6_000_000);
     }
 
     #[test]

@@ -85,9 +85,12 @@ pub struct Prefs {
     pub drag_image_format: usize,
     /// Recolor's Flood, kept from one time to the next.
     pub recolor_threshold: f32,
-    /// Image generation's server, as `host:port` (empty: none), and NSFW allowed.
+    /// Image generation's server, as `host:port` (empty: none), NSFW allowed, the resolution
+    /// choice (Draft, Normal, Quality) and the largest picture in megapixels (0: from the GPU).
     pub generation_address: String,
     pub generation_nsfw: bool,
+    pub generation_resolution: usize,
+    pub generation_largest: f32,
 }
 
 impl Default for Prefs {
@@ -127,6 +130,8 @@ impl Default for Prefs {
             recolor_threshold: 0.0,
             generation_address: String::new(),
             generation_nsfw: false,
+            generation_resolution: 2,
+            generation_largest: 0.0,
         }
     }
 }
@@ -194,6 +199,12 @@ impl Prefs {
                 "recolor_threshold" => p.recolor_threshold = unit.unwrap_or(0.0),
                 "generation_address" => p.generation_address = value.trim().to_owned(),
                 "generation_nsfw" => p.generation_nsfw = on,
+                "generation_resolution" => {
+                    p.generation_resolution = value.parse::<usize>().map_or(2, |r| r.min(2));
+                }
+                "generation_largest" => {
+                    p.generation_largest = number.map_or(0.0, |v| if v <= 0.0 { 0.0 } else { v.clamp(1.0, 16.0) });
+                }
                 "actions_tab" => p.actions_tab = value.parse::<usize>().map_or(0, |t| t.min(5)),
                 "curve" => {
                     let numbers: Vec<f32> = value.split(',').filter_map(|v| v.parse().ok()).collect();
@@ -247,6 +258,8 @@ impl Prefs {
             format!("recolor_threshold {}", self.recolor_threshold),
             format!("generation_address {}", self.generation_address),
             format!("generation_nsfw {}", self.generation_nsfw),
+            format!("generation_resolution {}", self.generation_resolution),
+            format!("generation_largest {}", self.generation_largest),
         ];
         crate::files::keep_text("interface", &(lines.join("\n") + "\n"));
     }

@@ -103,8 +103,9 @@ pub use frame::{configure, screen_profile};
 pub use gallery::{ArtworkStore, GalleryArtwork, GalleryEntry, ZipKind, zip_file_kind};
 #[cfg(feature = "generation")]
 pub use generation::{
-    FeatureStatus, Generation, GenerationError, GenerationFeature, GenerationSettings, GenerationState, ResultInfo,
-    RunInfo, RunSettings, ServerConnection, ServerStatus, StyleInfo, generation_address,
+    FeatureStatus, Generation, GenerationError, GenerationFeature, GenerationResolution, GenerationSettings,
+    GenerationState, ResultInfo, RunInfo, RunSettings, ServerConnection, ServerStatus, SizeInfo, StyleInfo,
+    generation_address,
 };
 pub use gestures::{
     GestureOption, GesturePurpose, GestureSettings, KeptGestures, MAX_DELAY_S, MIN_DELAY_S, Trigger, gesture_options,

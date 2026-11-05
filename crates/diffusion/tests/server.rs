@@ -6,7 +6,9 @@
 
 use std::time::{Duration, Instant};
 
-use procraft_diffusion::{Address, Connection, Error, Family, Feature, Request, RunState, ServerState, Worker};
+use procraft_diffusion::{
+    Address, Connection, Error, Family, Feature, Request, Resolution, RunState, ServerState, Worker, plan_for,
+};
 
 fn address() -> Address {
     let text = std::env::var("PROCRAFT_COMFY_URL").unwrap_or_else(|_| "127.0.0.1:8189".to_owned());
@@ -47,6 +49,8 @@ fn turbo(server: &ServerState, size: (u32, u32), count: u32) -> Request {
         count,
         picture: None,
         size,
+        resolution: Resolution::Quality,
+        largest: Some(6.0),
         nsfw: false,
     }
 }
@@ -73,8 +77,10 @@ fn pictures_come_back_at_the_size_asked() {
     assert_eq!(run.error, None);
     assert_eq!(run.results.len(), 2);
     assert_eq!(run.results.iter().map(|r| r.seed).collect::<Vec<_>>(), [1234, 1235]);
+    let plan = plan_for(700, 500, Family::Anima.native_pixels(), Resolution::Quality, 6.0, false);
     for r in &run.results {
         assert_eq!((r.picture.width, r.picture.height), (700, 500));
+        assert_eq!(r.generated, (plan.size.width, plan.size.height));
     }
 }
 
