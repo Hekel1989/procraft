@@ -476,7 +476,7 @@ struct Artwork {
 #[derive(uniffi::Object)]
 pub struct Generation {
     worker: Worker,
-    settings: Mutex<GenerationSettings>,
+    pub(crate) settings: Mutex<GenerationSettings>,
     artwork: Mutex<Artwork>,
     /// What finished loads report to; [`Generation::state`] takes them in when ready.
     loaded: Mutex<mpsc::Receiver<LoadedResults>>,
@@ -764,6 +764,7 @@ impl Generation {
             largest: Some(self.largest_megapixels(&server)),
             nsfw: self.settings.lock().nsfw,
         };
+        crate::generation_tags::remember(&request.prompt);
         let name = layer_name(&request.prompt);
         let id = self.worker.submit(request);
         artwork.running = Some(Running { id, area, mask, name, taken: 0, previews: 0, preview: None });

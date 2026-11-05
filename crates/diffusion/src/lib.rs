@@ -21,6 +21,7 @@ pub mod plan;
 mod request;
 pub mod requirements;
 mod styles;
+pub mod tags;
 mod worker;
 
 pub use comfy::{Address, Comfy, ServerModels, SystemStats};

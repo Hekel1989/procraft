@@ -82,6 +82,8 @@ pub struct GenerationUi {
     pub settings_changed: bool,
     view: View,
     prompt: String,
+    /// The prompt's caret as a byte offset, as the field last reported it.
+    prompt_caret: usize,
     style: String,
     strength: f32,
     /// The seed kept for the next run (none: a random one each time), and as typed.
@@ -122,14 +124,17 @@ impl GenerationUi {
             _ => GenerationResolution::Quality,
         };
         let largest = (prefs.generation_largest > 0.0).then_some(prefs.generation_largest);
-        GenerationUi::new(
+        let ui = GenerationUi::new(
             GenerationSettings {
                 address: prefs.generation_address.clone(),
                 nsfw: prefs.generation_nsfw,
                 largest_megapixels: largest,
             },
             resolution,
-        )
+        );
+        ui.generation.set_recent_prompts(prefs.generation_recent.clone());
+        crate::prefs::set_generation_recent(prefs.generation_recent.clone());
+        ui
     }
 
     pub fn new(settings: GenerationSettings, resolution: GenerationResolution) -> GenerationUi {
@@ -142,6 +147,7 @@ impl GenerationUi {
             settings_changed: false,
             view: View::Form,
             prompt: String::new(),
+            prompt_caret: 0,
             style: String::new(),
             strength: 1.0,
             seed: None,
@@ -169,6 +175,9 @@ impl GenerationUi {
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.state = self.generation.state();
         self.server = self.generation.server();
+        if crate::prefs::set_generation_recent(self.generation.recent_prompts()) {
+            self.settings_changed = true;
+        }
         let busy = self.state.running.is_some() || self.server.connection == ServerConnection::Connecting;
         if busy {
             ctx.request_repaint_after(POLL);
@@ -279,7 +288,22 @@ impl GenerationUi {
         let selection = if self.selection.is_some() { 70.0 } else { 0.0 };
         let controls =
             if self.controls.is_empty() { 0.0 } else { 22.0 + CONTROL_ROW * self.controls.len() as f32 + 4.0 };
-        56.0 + 22.0 + 84.0 + 22.0 + 90.0 + controls + selection + 54.0 + 52.0 + 22.0 + 46.0 + 24.0 + 60.0 + error + PAD
+        let strip = crate::generation_tags::STRIP_HEIGHT + crate::generation_tags::STRIP_GAP;
+        56.0 + 22.0
+            + 84.0
+            + 22.0
+            + 90.0
+            + strip
+            + controls
+            + selection
+            + 54.0
+            + 52.0
+            + 22.0
+            + 46.0
+            + 24.0
+            + 60.0
+            + error
+            + PAD
     }
 
     fn server_height(&self) -> f32 {
@@ -391,7 +415,11 @@ impl GenerationUi {
         let field = Rect::from_min_max(pos2(left, y), pos2(right, y + 82.0));
         ui.painter().rect_filled(field, 12.0, argb(FIELD));
         let inner = field.shrink2(vec2(12.0, 10.0));
+        let prompt_id = egui::Id::unique("generate prompt");
+        let took_enter =
+            crate::generation_tags::keys(ui, &self.generation, &mut self.prompt, &mut self.prompt_caret, prompt_id);
         let edit = egui::TextEdit::multiline(&mut self.prompt)
+            .id(prompt_id)
             .font(Weight::Regular.font(15.0))
             .text_color(argb(INK))
             .frame(egui::Frame::NONE)
@@ -399,9 +427,23 @@ impl GenerationUi {
             .hint_text("Describe it, or type tags…")
             .desired_width(inner.width())
             .desired_rows(3);
-        let response = edit.show(&mut ui.new_child(UiBuilder::new().max_rect(inner))).response;
-        let enter = response.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
-        y += 90.0;
+        let output = edit.show(&mut ui.new_child(UiBuilder::new().max_rect(inner)));
+        let focused = output.response.has_focus();
+        if let Some(range) = output.cursor_range {
+            self.prompt_caret = crate::generation_tags::char_to_byte(&self.prompt, range.primary.index.0);
+        }
+        crate::generation_tags::strip(
+            ui,
+            &self.generation,
+            &mut self.prompt,
+            &mut self.prompt_caret,
+            prompt_id,
+            focused,
+            pos2(left, y + 90.0),
+            right - left,
+        );
+        let enter = !took_enter && focused && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+        y += 90.0 + crate::generation_tags::STRIP_HEIGHT + crate::generation_tags::STRIP_GAP;
         // control layers: one row each, its picture, what it is, how strongly to follow it, and a
         // × to stop using the layer as one
         if !self.controls.is_empty() {
@@ -676,7 +718,12 @@ impl GenerationUi {
             controls,
         };
         match self.generation.generate(session, run.clone()) {
-            Ok(_) => self.last = Some(run),
+            Ok(_) => {
+                self.last = Some(run);
+                if crate::prefs::set_generation_recent(self.generation.recent_prompts()) {
+                    self.settings_changed = true;
+                }
+            }
             Err(e) => self.state.error = Some(e.to_string()),
         }
     }

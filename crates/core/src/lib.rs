@@ -29,6 +29,8 @@ mod frame;
 mod gallery;
 #[cfg(feature = "generation")]
 mod generation;
+#[cfg(feature = "generation")]
+mod generation_tags;
 mod gestures;
 mod gradients;
 mod guide;
@@ -107,6 +109,8 @@ pub use generation::{
     GenerationResolution, GenerationSettings, GenerationState, ResultInfo, RunInfo, RunSettings, SelectionInfo,
     ServerConnection, ServerStatus, SizeInfo, StyleInfo, generation_address,
 };
+#[cfg(feature = "generation")]
+pub use generation_tags::{TagCompletion, TagKind, TagSuggestion};
 pub use gestures::{
     GestureOption, GesturePurpose, GestureSettings, KeptGestures, MAX_DELAY_S, MIN_DELAY_S, Trigger, gesture_options,
     gesture_purpose_heading, gesture_purpose_title, gesture_purposes, gesture_trigger_label,
