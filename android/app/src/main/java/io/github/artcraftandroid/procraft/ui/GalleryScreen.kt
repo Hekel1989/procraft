@@ -208,7 +208,7 @@ fun GalleryScreen(vm: CanvasViewModel) {
             if (selecting) {
                 val screen = androidx.compose.ui.platform.LocalConfiguration.current
                 SelectHeader(
-                    title = vm.openStack?.name ?: "ProCraft",
+                    title = vm.openStack?.name ?: "ProCraft Diffusion",
                     count = selected.size,
                     wide = screen.screenWidthDp > screen.screenHeightDp,
                     canStack = vm.openStack == null,
@@ -724,7 +724,7 @@ private fun GalleryHeader(
                 }
             } else {
                 Text(
-                    "ProCraft",
+                    "ProCraft Diffusion",
                     color = Pc.GalleryTitle,
                     fontSize = 36.sp,
                     fontWeight = FontWeight.Bold,
@@ -1677,7 +1677,7 @@ private fun AboutApp(onClose: () -> Unit) {
                     modifier = Modifier.requiredSize(450.dp),
                 )
             }
-            Text("ProCraft", color = Color.White, fontSize = 64.sp, fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.padding(top = 12.dp))
+            Text("ProCraft Diffusion", color = Color.White, fontSize = 52.sp, fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.padding(top = 12.dp))
             Text(version, color = AboutInk, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(top = 14.dp))
         }
         Box(
