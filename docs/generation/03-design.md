@@ -124,8 +124,10 @@ ProCraft's margins:
 - **Cancel**: while a run is going, ✕ on the running thumbnail cancels it.
 - Starting a stroke hides the preview (the bar stays); the bar hides with other tools' bars
   (Adjustments, Transform) and comes back after.
-- Results last until the artwork is closed; leaving it drops the ones not applied (saved with it
-  in Phase 2).
+- **Results stay with the artwork**: leaving it (back to the Gallery) keeps the bar's results, and
+  opening it again brings them back, even after the app restarts. They are saved in the artwork's
+  private `generation/` folder (§B10), up to 24 per artwork (the oldest is dropped and deleted);
+  applied results stay in the bar too. ✕ discards them for good.
 
 ## A5. Selections
 
@@ -267,7 +269,8 @@ Two objects:
 As built in M2 (`crates/core/src/generation.rs`): `Generation::new(settings)`, `set_settings`,
 `connect`, `server() -> ServerStatus`, `styles() -> Vec<StyleInfo>`, `generate(session, RunSettings)`,
 `cancel`, `state() -> GenerationState`, `show_result(session, Option<id>)`,
-`apply_result(session, id) -> Option<layer>`, `discard_results(session)`, `leave(session)`, and
+`apply_result(session, id) -> Option<layer>`, `discard_results(session)`, `leave(session)`,
+`set_folder(session, folder)` (the artwork's folder, for results kept with it) and
 `generation_address(text)`. M3 adds `selection(session) -> Option<SelectionInfo>`, the context box
 and guessed mode the Form's Selection row uses. The sketch below was the plan.
 
@@ -341,7 +344,8 @@ apply_result(id) ─► 8. new layer through change("Generate"),
 - The canvas lock is held only for 1, 7, 8. Encoding, network and decoding run on the worker.
 - **One run at a time per server**, queued in order; Phase 1's UI only starts one at a time anyway
   (Generate is "Cancel" while running).
-- **Leaving the artwork** cancels its running job and drops its unapplied results (§D3 5).
+- **Leaving the artwork** cancels its running job; the pictures it finished are kept and saved with
+  the artwork, and opening it again brings its results back (§B10, §D3 5).
 - The worker thread lives as long as `Generation`; it parks when idle.
 - **Colour**: the picture is converted from the canvas's profile to sRGB on the way out and back on
   the way in (core's existing conversion, `colour.rs`).
@@ -524,7 +528,19 @@ A style (`styles/anima.json`, our own file):
 - **Control layer**: `Layer.control: Option<{ kind, strength }>` in the engine's document,
   `#[serde(default, skip_serializing_if = "Option::is_none")]`. Old artworks load unchanged; an
   artwork with control layers opened in upstream ProCraft just ignores the field.
-- Nothing else in Phase 1 (results and history: Phase 2).
+- **Results** (brought forward from Phase 2): kept in the artwork's folder, in a private
+  `generation/` subfolder that no export reads. `index.json` lists every result in order (its id,
+  seed, name, area, scaled_from and thumbnail size), `<id>.png` holds its pixels losslessly
+  (premultiplied RGBA8, in the canvas's colours) and `<id>.thumb.png` its small picture. They are
+  written on a background thread, each PNG and the index beside its final name until whole and
+  then renamed, the index last; an interrupted save leaves the last index whole. At most 24 are
+  kept per artwork: adding another drops and deletes the oldest. Discard deletes them; opening the
+  artwork reads only the thumbnails, on a background thread, and they appear in the bar when ready.
+  Only the shown result keeps its full pixels in memory (read from its PNG then, dropped when
+  another is shown), as does one just made until it is written; `apply_result` reads them if
+  needed. `set_folder` tells generation where the open artwork lives. An app built without the
+  `generation` feature ignores the folder.
+- Nothing else in Phase 1 (history: Phase 2).
 - App-wide, kept like ProCraft's other preferences (Android `SharedPreferences`, desktop's
   `interface` file): server address, NSFW switch, last style, recent prompts (20).
 
@@ -670,13 +686,9 @@ Not done yet, carried forward:
 | 2 | Name | **"Control layer"** — the term ComfyUI users know |
 | 3 | Desktop shortcut | **`G`** opens Generate |
 | 4 | Popover on Generate | **Stays open** for tweaking (§A3) |
-| 5 | Leaving an artwork during a run | **(a) cancel the run, drop unapplied results** |
+| 5 | Leaving an artwork during a run | **(a) cancel the run; results stay saved with the artwork** |
 
-**5, in detail.** Results live only in memory in Phase 1 (saving them with the artwork is Phase 2).
-So what happens if you go back to the Gallery, or open another artwork, while a run is going or
-while the results bar still has pictures you haven't applied?
-- **(a) Simplest — chosen:** the run is cancelled and the unapplied results are dropped. You keep
-  only what you applied.
-- **(b) Kept for the session:** the run finishes in the background, and the artwork's results stay
-  in memory until the app closes; coming back to the artwork shows them again. More memory and a
-  little more code; lost anyway if Android closes the app in the background.
+**5, in detail.** Results are saved with the artwork (§B10, brought forward from Phase 2). Going
+back to the Gallery, or opening another artwork, while a run is going cancels the run: the pictures
+it finished are kept and saved, and opening the artwork again (even after a restart) brings them
+back. A session-only artwork, with no folder set, keeps its results in memory for that session.

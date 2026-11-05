@@ -172,10 +172,16 @@ impl GenerationUi {
         self.state.running.is_some() || !self.state.results.is_empty() || self.state.error.is_some()
     }
 
-    /// The artwork is closing: its run is cancelled and its results dropped.
+    /// The artwork is closing: its run is cancelled and its results kept with the artwork.
     pub fn leave(&mut self, session: &CanvasSession) {
         self.generation.leave(session);
         self.state = GenerationState::default();
+    }
+
+    /// The artwork `session` lives in `folder`: its kept results come back, read on a thread of
+    /// their own.
+    pub fn set_folder(&self, session: &CanvasSession, folder: String) {
+        self.generation.set_folder(session, folder);
     }
 
     /// Opens the server view (from the Prefs tab).
