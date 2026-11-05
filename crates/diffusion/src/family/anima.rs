@@ -109,7 +109,7 @@ pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerMod
         let mask = Picture::resized_mask(request.size.0, request.size.1, &selection.mask, width, height)?;
         let mask = Picture::mask_png(width, height, &mask)?;
         let mask = g.add("ETN_LoadMaskBase64", [("mask", json!(procraft_engine::base64::encode(&mask)))]);
-        let longer = request.size.0.max(request.size.1);
+        let longer = width.max(height);
         let grow = ((longer as f32 * INPAINT_GROW).round() as u32).max(INPAINT_GROW_MIN);
         let blur = (grow / INPAINT_BLUR_SHARE).max(1);
         let grown = g.add(
