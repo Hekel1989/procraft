@@ -20,11 +20,14 @@ pub fn resolution(width: u32, height: u32) -> u32 {
     rounded.clamp(LEAST_RESOLUTION, MOST_RESOLUTION)
 }
 
-/// The extractor for `kind`: its node and the inputs besides its picture and resolution.
-fn extractor(kind: ControlKind) -> (&'static str, &'static [(&'static str, &'static str)]) {
+/// The extractor steps for `kind`, in order, each a node and its inputs besides its picture and
+/// resolution. Scribble is PiDiNet's soft edges (safe mode) made into scribble strokes, as
+/// krita-ai-diffusion does: connected, even strokes, where the one-step "Scribble PiDiNet" node
+/// left broken dots.
+fn extractor(kind: ControlKind) -> &'static [(&'static str, &'static [(&'static str, &'static str)])] {
     match kind {
-        ControlKind::LineArt => ("AnimeLineArtPreprocessor", &[]),
-        ControlKind::Scribble => ("Scribble_PiDiNet_Preprocessor", &[("safe", "enable")]),
+        ControlKind::LineArt => &[("AnimeLineArtPreprocessor", &[])],
+        ControlKind::Scribble => &[("PiDiNetPreprocessor", &[("safe", "enable")]), ("ScribblePreprocessor", &[])],
     }
 }
 
@@ -33,11 +36,13 @@ pub fn graph(kind: ControlKind, picture: &Picture) -> Result<Graph, Error> {
     let png = picture.to_png()?;
     let mut g = Graph::new();
     let image = g.add("ETN_LoadImageBase64", [("image", json!(procraft_engine::base64::encode(&png)))]);
-    let (class, extra) = extractor(kind);
-    let mut inputs: Vec<(&str, Value)> =
-        vec![("image", image.out(0).into()), ("resolution", json!(resolution(picture.width, picture.height)))];
-    inputs.extend(extra.iter().map(|&(name, value)| (name, json!(value))));
-    let lines = g.add(class, inputs);
+    let mut lines = image;
+    for &(class, extra) in extractor(kind) {
+        let mut inputs: Vec<(&str, Value)> =
+            vec![("image", lines.out(0).into()), ("resolution", json!(resolution(picture.width, picture.height)))];
+        inputs.extend(extra.iter().map(|&(name, value)| (name, json!(value))));
+        lines = g.add(class, inputs);
+    }
     g.add("ETN_SendImageWebSocket", [("images", lines.out(0).into()), ("format", json!("PNG"))]);
     Ok(g)
 }
@@ -80,12 +85,18 @@ mod tests {
     }
 
     #[test]
-    fn scribble_goes_through_the_pidinet_extractor_with_safety_on() {
+    fn scribble_is_pidinet_with_safety_on_made_into_scribble_strokes() {
         let g = graph(ControlKind::Scribble, &picture(1024, 700)).unwrap();
         let json = g.to_json();
-        let extractor = g.nodes_of("Scribble_PiDiNet_Preprocessor");
-        assert_eq!(extractor.len(), 1);
-        assert_eq!(json[&extractor[0]]["inputs"]["resolution"], 704);
-        assert_eq!(json[&extractor[0]]["inputs"]["safe"], "enable");
+        let pidinet = g.nodes_of("PiDiNetPreprocessor");
+        assert_eq!(pidinet.len(), 1);
+        assert_eq!(json[&pidinet[0]]["inputs"]["resolution"], 704);
+        assert_eq!(json[&pidinet[0]]["inputs"]["safe"], "enable");
+        let scribble = g.nodes_of("ScribblePreprocessor");
+        assert_eq!(scribble.len(), 1);
+        assert_eq!(json[&scribble[0]]["inputs"]["resolution"], 704);
+        assert_eq!(json[&scribble[0]]["inputs"]["image"][0], json!(pidinet[0]), "it takes PiDiNet's edges");
+        let sent = g.nodes_of("ETN_SendImageWebSocket");
+        assert_eq!(json[&sent[0]]["inputs"]["images"][0], json!(scribble[0]), "and its strokes are sent");
     }
 }

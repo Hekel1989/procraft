@@ -56,7 +56,8 @@ impl Feature {
                 "ETN_SendImageWebSocket",
                 "ETN_LoadImageBase64",
                 "AnimeLineArtPreprocessor",
-                "Scribble_PiDiNet_Preprocessor",
+                "PiDiNetPreprocessor",
+                "ScribblePreprocessor",
             ],
         }
     }
@@ -83,7 +84,7 @@ pub fn all_nodes() -> Vec<&'static str> {
 pub fn add_on(node: &str) -> &'static str {
     if node.starts_with("INPAINT_") {
         "comfyui-inpaint-nodes"
-    } else if node == "AnimeLineArtPreprocessor" || node == "Scribble_PiDiNet_Preprocessor" {
+    } else if matches!(node, "AnimeLineArtPreprocessor" | "PiDiNetPreprocessor" | "ScribblePreprocessor") {
         "comfyui_controlnet_aux"
     } else {
         "comfyui-tooling-nodes"
@@ -194,7 +195,8 @@ mod tests {
     #[test]
     fn the_extractors_come_from_the_controlnet_aux_add_on() {
         assert_eq!(add_on("AnimeLineArtPreprocessor"), "comfyui_controlnet_aux");
-        assert_eq!(add_on("Scribble_PiDiNet_Preprocessor"), "comfyui_controlnet_aux");
+        assert_eq!(add_on("PiDiNetPreprocessor"), "comfyui_controlnet_aux");
+        assert_eq!(add_on("ScribblePreprocessor"), "comfyui_controlnet_aux");
         // the tooling nodes are there, the extractors aren't
         let models = server(
             &["ETN_SendImageWebSocket", "ETN_LoadImageBase64", "ETN_control_load", "ETN_control_apply"],
