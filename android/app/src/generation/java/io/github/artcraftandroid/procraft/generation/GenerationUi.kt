@@ -144,8 +144,8 @@ object GenerationUi {
     // the selection's mode as picked (none: the guess), and the selection it was picked for
     private var mode by mutableStateOf<GenerationMode?>(null)
     private var modeFor: SelectionInfo? = null
-    // each control layer's strength while the app runs, by layer id (else its kind's default)
-    private val controlStrengths = mutableStateMapOf<ULong, Float>()
+    // how closely to follow each control layer while the app runs, by layer id (else Balanced)
+    private val controlSteps = mutableStateMapOf<ULong, io.github.artcraftandroid.procraft.core.ControlStep>()
     // the result held down, showing its Delete
     private var deleting by mutableStateOf<ULong?>(null)
     private var address by mutableStateOf("")
@@ -157,6 +157,9 @@ object GenerationUi {
     private var preview by mutableStateOf<Pair<Long, ImageBitmap>?>(null)
 
     private fun prefs(context: Context) = context.getSharedPreferences("generation", Context.MODE_PRIVATE)
+
+    // the open artwork's refresh, for a layer made on the server
+    private var refreshLayers: (() -> Unit)? = null
 
     // the app's context, for keeping the recent prompts after a run
     private var appContext: Context? = null
@@ -184,6 +187,8 @@ object GenerationUi {
     /** Looks at the run and the server; makes bitmaps for new results. */
     private fun poll(g: Generation) {
         state = g.state()
+        // a control layer made from the picture landed: the layers panel shows it
+        if (state.madeLayer != null) refreshLayers?.invoke()
         server = g.server()
         val ids = state.results.map { it.id }.toSet()
         bitmaps.keys.retainAll(ids)
@@ -206,6 +211,7 @@ object GenerationUi {
     @Composable
     fun BarButton(vm: CanvasViewModel) {
         val g = generation(LocalContext.current)
+        refreshLayers = { vm.refresh() }
         // the run and the server looked at often while something is under way, else now and then
         LaunchedEffect(g) {
             while (true) {
@@ -236,6 +242,22 @@ object GenerationUi {
     fun opened(session: CanvasSession, folder: String) {
         opened = session to folder
         generation?.setFolder(session, folder)
+    }
+
+    /** Whether the server can make line art or scribble from the picture (it has the extractors). */
+    fun canExtract(): Boolean = generation?.canExtract() ?: false
+
+    /** Makes a control layer of `kind` from the visible picture, on the server; errors show in the bar. */
+    fun fromPicture(vm: CanvasViewModel, kind: io.github.artcraftandroid.procraft.core.LayerControl) {
+        val g = generation ?: return
+        val s = vm.session ?: return
+        error = try {
+            g.controlFromPicture(s, kind)
+            null
+        } catch (e: GenerationException) {
+            e.message
+        }
+        poll(g)
     }
 
     /** Opens the server view (from the Prefs tab). */
@@ -384,8 +406,7 @@ object GenerationUi {
             if (controls.isNotEmpty()) {
                 Label("CONTROL LAYERS")
                 for (c in controls) {
-                    val default = if (c.kind == io.github.artcraftandroid.procraft.core.LayerControl.LINE_ART) 0.7f else 0.5f
-                    val value = controlStrengths[c.id] ?: default
+                    val step = controlSteps[c.id] ?: io.github.artcraftandroid.procraft.core.ControlStep.BALANCED
                     Row(Modifier.padding(horizontal = 16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Image(c.thumbnail.bitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.size(36.dp).clip(RoundedCornerShape(7.dp)).background(Color.White))
                         Spacer(Modifier.width(10.dp))
@@ -395,8 +416,15 @@ object GenerationUi {
                         }
                         Text("×", color = Dim, fontSize = 22.sp, modifier = Modifier.tap { vm.session?.setLayerControl(c.id, null); vm.refresh() }.padding(horizontal = 8.dp))
                     }
-                    Box(Modifier.padding(horizontal = 6.dp)) {
-                        SliderRow("Strength", value, "${(value * 100).toInt()}%") { t -> controlStrengths[c.id] = Math.round(t * 100) / 100f }
+                    // how closely to follow it: four steps, Balanced at first
+                    Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 8.dp).fillMaxWidth().height(36.dp).clip(RoundedCornerShape(11.dp)).background(RowFill).padding(3.dp)) {
+                        for ((choice, words) in listOf(io.github.artcraftandroid.procraft.core.ControlStep.LOOSE to "Loose", io.github.artcraftandroid.procraft.core.ControlStep.BALANCED to "Balanced", io.github.artcraftandroid.procraft.core.ControlStep.CLOSE to "Close", io.github.artcraftandroid.procraft.core.ControlStep.STRICT to "Strict")) {
+                            val on = step == choice
+                            Box(
+                                Modifier.weight(1f).height(30.dp).clip(RoundedCornerShape(8.dp)).background(if (on) Pc.Accent else Color.Transparent).tap { controlSteps[c.id] = choice },
+                                contentAlignment = Alignment.Center,
+                            ) { Text(words, color = if (on) Color.White else Dim, fontSize = 13.sp, fontWeight = FontWeight.Medium) }
+                        }
                     }
                 }
             }
@@ -455,7 +483,7 @@ object GenerationUi {
                     .background(if (ready || running != null) fill else fill.copy(alpha = 0.4f))
                     .tap {
                         focus.clearFocus()
-                        if (running != null) g.cancel() else if (ready) run(vm, g, RunSettings(prompt, style, strength, seed, count.toUInt(), resolution, picked, controlStrengths.map { (id, v) -> io.github.artcraftandroid.procraft.core.ControlSetting(id, v) }))
+                        if (running != null) g.cancel() else if (ready) run(vm, g, RunSettings(prompt, style, strength, seed, count.toUInt(), resolution, picked, controlSteps.map { (id, v) -> io.github.artcraftandroid.procraft.core.ControlSetting(id, v) }))
                     },
                 contentAlignment = Alignment.Center,
             ) { Text(words, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold) }
@@ -702,6 +730,10 @@ object GenerationUi {
                     Box(Modifier.size(66.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF2A2A2A)).tap { g.cancel() }, contentAlignment = Alignment.Center) {
                         preview?.takeIf { run.preview != null }?.let { Image(it.second, null, contentScale = ContentScale.Crop, alpha = 0.65f, modifier = Modifier.size(66.dp)) }
                         ProgressRing(run.progress, Modifier.size(34.dp))
+                    }
+                    if (run.extracting) {
+                        val what = if (run.extractKind == io.github.artcraftandroid.procraft.core.LayerControl.SCRIBBLE) "scribble" else "line art"
+                        Text("Making $what…", color = Dim, fontSize = 13.sp, maxLines = 1)
                     }
                 }
                 state.error?.let { Text(it, color = WARN, fontSize = 12.sp, maxLines = 2, modifier = Modifier.widthIn(max = 260.dp)) }

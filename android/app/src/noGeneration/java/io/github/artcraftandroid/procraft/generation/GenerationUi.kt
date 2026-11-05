@@ -17,6 +17,10 @@ object GenerationUi {
 
     fun opened(session: io.github.artcraftandroid.procraft.core.CanvasSession, folder: String) = Unit
 
+    fun canExtract() = false
+
+    fun fromPicture(vm: CanvasViewModel, kind: io.github.artcraftandroid.procraft.core.LayerControl) = Unit
+
     fun openServer() = Unit
 
     fun leave(vm: CanvasViewModel) = Unit
