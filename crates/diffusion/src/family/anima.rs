@@ -71,11 +71,11 @@ pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerMod
     let selection = request.selection.as_ref();
     let removing = selection.is_some_and(|s| s.mode == SelectionMode::Remove);
     let prompt = if removing { "" } else { request.prompt.as_str() };
-    let positive = text(&mut g, style.positive(prompt, request.nsfw));
+    let positive = text(&mut g, style.positive(prompt));
     let negative = if removing {
-        text(&mut g, style.negative_for("object, person, text", request.nsfw))
+        text(&mut g, format!("{}, object, person, text", style.negative))
     } else {
-        text(&mut g, style.negative_for("", request.nsfw))
+        text(&mut g, style.negative.clone())
     };
     let mut model: Out = checkpoint.out(0);
     let sampler = |g: &mut Graph, model: Out, latent: Out, denoise: f64| {
@@ -280,7 +280,7 @@ mod tests {
         let g = graph(&request(1.0), one_pass(1024, 768), 42, &models()).unwrap().to_json();
         assert_eq!(g["1"]["inputs"]["unet_name"], "anima_baseV10.safetensors");
         assert_eq!(g["2"]["inputs"]["type"], "omnigen2");
-        assert_eq!(g["4"]["inputs"]["text"], "masterpiece, best quality, safe, 1girl, night sky");
+        assert_eq!(g["4"]["inputs"]["text"], "masterpiece, best quality, 1girl, night sky");
         assert_eq!(g["6"]["class_type"], "EmptyLatentImage");
         assert_eq!((g["6"]["inputs"]["width"].clone(), g["6"]["inputs"]["height"].clone()), (json!(1024), json!(768)));
         assert_eq!(g["7"]["inputs"]["seed"], 42);
@@ -384,13 +384,10 @@ mod tests {
         let built = graph(&selection(SelectionMode::Remove), one_pass(64, 64), 42, &models()).unwrap();
         let g = built.to_json();
         let texts = built.nodes_of("CLIPTextEncode");
-        assert_eq!(g[&texts[0]]["inputs"]["text"], "masterpiece, best quality, safe");
-        let negative = g[&texts[1]]["inputs"]["text"].as_str().unwrap();
-        assert!(
-            negative.starts_with(
-                "worst quality, low quality, blurry, jpeg artifacts, watermark, signature, object, person, text, nsfw"
-            ),
-            "{negative}"
+        assert_eq!(g[&texts[0]]["inputs"]["text"], "masterpiece, best quality");
+        assert_eq!(
+            g[&texts[1]]["inputs"]["text"],
+            "worst quality, low quality, blurry, jpeg artifacts, watermark, signature, object, person, text"
         );
     }
 

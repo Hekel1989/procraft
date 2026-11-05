@@ -14,8 +14,8 @@ Measured on the dev ComfyUI (24 GB GPU, 2026-11-05), used for the numbers below:
 | First run after ComfyUI starts (loading everything) | ≈ 21 s |
 
 The plain graph (UNETLoader → CLIPLoader type `omnigen2` with `qwen_3_06b_base` → KSampler →
-VAEDecode with `qwen_image_vae`) gives clean pictures. Without a rating tag, Anima drifts towards
-suggestive content, so styles add `safe` unless NSFW is on (§B9).
+VAEDecode with `qwen_image_vae`) gives clean pictures. No rating tag is added: what is generated
+is up to the person (§B9).
 
 ---
 
@@ -178,7 +178,8 @@ Image generation** that opens the popover on it. Its content:
   - Models: Anima checkpoint(s), text encoder, VAE, inpaint control, line-art control
   - What works: Generate · Refine · Selections · Control layers — each ✓ or "needs <file> in
     <folder>".
-- **Show NSFW tags** — switch, off by default. Also drops the `safe` rating tag from the styles (§B9).
+- **Show NSFW tags** — switch, off by default. It only chooses whether NSFW tags are suggested
+  while typing; it never changes what is generated (decided 2026-11-05).
 - **About** — "Pictures and prompts are sent to this server and nowhere else." and the model's
   licence line ("Anima: CircleStone Labs Non-Commercial License. Built on NVIDIA Cosmos.") once an
   Anima model is found.
@@ -499,7 +500,7 @@ A style (`styles/anima.json`, our own file):
 ```json
 { "id": "anima", "name": "Anima", "family": "anima",
   "checkpoint": ["anima_base*", "anima-base*"],
-  "positive": "masterpiece, best quality, {rating}, {prompt}",
+  "positive": "masterpiece, best quality, {prompt}",
   "negative": "worst quality, low quality, blurry, jpeg artifacts, watermark, signature",
   "sampler": "euler_ancestral", "scheduler": "normal", "steps": 30, "cfg": 4.0 }
 ```
@@ -510,8 +511,9 @@ A style (`styles/anima.json`, our own file):
 | **Anima Turbo** | `anima_turbo*` | euler / simple | 8 | 1 |
 | *each other Anima checkpoint on the server* | that file | as Anima | 30 | 4 |
 
-- `{rating}` is `safe` while NSFW is off, empty when on. (Observed: without it the turbo model
-  drifts into suggestive results.)
+- No rating tag: the NSFW switch only filters tag suggestions, and what people generate is up to
+  them. (Until 2026-11-05 a `safe` tag was added while it was off.) Without a subject in the
+  prompt, Anima Turbo can produce explicit pictures, so tests use explicit safe subjects.
 - Fine-tunes are recognised as Anima by name (`*anima*` in `diffusion_models/`) — the same rule
   krita-ai-diffusion uses — and get the Anima style's settings.
 - With strength < 100 %, nothing changes in the style: ComfyUI's KSampler with `denoise` below 1

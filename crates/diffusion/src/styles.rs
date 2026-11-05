@@ -15,7 +15,7 @@ pub struct Style {
     pub family: Family,
     /// The checkpoint's file, as the server lists it.
     pub checkpoint: String,
-    /// The prompt wrapped around the user's: `{prompt}` is theirs, `{rating}` the rating tag.
+    /// The prompt wrapped around the user's: `{prompt}` is theirs.
     pub template: String,
     pub negative: String,
     pub sampler: String,
@@ -71,32 +71,14 @@ impl Style {
         Some(w.with(file))
     }
 
-    /// The prompt to send for `prompt`: the template filled in, the rating tag `safe` unless
-    /// `nsfw`, and no empty items left where something was left out.
-    pub fn positive(&self, prompt: &str, nsfw: bool) -> String {
-        let filled =
-            self.template.replace("{rating}", if nsfw { "" } else { "safe" }).replace("{prompt}", prompt.trim());
+    /// The prompt to send for `prompt`: the template filled in, with no empty items left where
+    /// something was left out. What is generated is up to the person: the NSFW switch only
+    /// chooses which tags are suggested, so no rating tag is added here.
+    pub fn positive(&self, prompt: &str) -> String {
+        let filled = self.template.replace("{prompt}", prompt.trim());
         filled.split(',').map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(", ")
     }
-
-    /// The negative prompt to send, with `extra` after the style's own: and unless `nsfw`, the
-    /// ratings and words that keep pictures safe (the `safe` tag alone isn't enough for Anima,
-    /// least of all with an empty or vague prompt).
-    pub fn negative_for(&self, extra: &str, nsfw: bool) -> String {
-        let safe = if nsfw { "" } else { SAFE_NEGATIVE };
-        [self.negative.as_str(), extra, safe]
-            .join(",")
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
 }
-
-/// Added to the negative prompt while NSFW is off.
-const SAFE_NEGATIVE: &str =
-    "nsfw, explicit, questionable, sensitive, nude, nudity, sexual, underwear, lingerie, cleavage";
 
 /// The styles a server can run: the built-in ones whose checkpoint it has, then one for each other
 /// checkpoint of the same families, named from its file.
@@ -128,15 +110,6 @@ fn name_of(file: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn nsfw_off_keeps_the_negative_safe() {
-        let style = super::written().into_iter().next().unwrap().with("x.safetensors");
-        let off = style.negative_for("object", false);
-        assert!(off.starts_with(&style.negative), "{off}");
-        assert!(off.contains("object, nsfw"), "{off}");
-        assert!(!style.negative_for("", true).contains("nsfw"));
-    }
-
     use super::*;
 
     fn models(files: &[&str]) -> ServerModels {
@@ -163,10 +136,9 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_is_wrapped_with_the_rating() {
+    fn the_prompt_is_wrapped_in_the_template() {
         let s = Style::built_in("anima", &models(&["anima_baseV10.safetensors"])).unwrap();
-        assert_eq!(s.positive(" 1girl, stars ", false), "masterpiece, best quality, safe, 1girl, stars");
-        assert_eq!(s.positive("1girl", true), "masterpiece, best quality, 1girl");
-        assert_eq!(s.positive("", false), "masterpiece, best quality, safe");
+        assert_eq!(s.positive(" 1girl, stars "), "masterpiece, best quality, 1girl, stars");
+        assert_eq!(s.positive(""), "masterpiece, best quality");
     }
 }
