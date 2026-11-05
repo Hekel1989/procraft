@@ -663,6 +663,8 @@ private fun LayerRow(
         val tag = when {
             l.reference && l.assisted -> "Assisted Reference"
             l.reference -> subtitle?.let { "$it Reference" } ?: "Reference"
+            l.control == io.github.artcraftandroid.procraft.core.LayerControl.LINE_ART -> "Line art control"
+            l.control == io.github.artcraftandroid.procraft.core.LayerControl.SCRIBBLE -> "Scribble control"
             subtitle != null -> subtitle
             l.assisted -> "Assisted"
             l.private -> "Private"
@@ -917,6 +919,7 @@ private fun LayerOptions(open: Boolean, vm: CanvasViewModel, l: LayerInfo, rowY:
             // frosted over the canvas, as the library's menus are; empty (a locked group's or
             // mask's), as measured, a pill 64 tall with the frost alone, untinted
             val rows = vm.layerOptions(l)
+            var choosingControl by remember(l.id) { mutableStateOf(false) }
             val tint = if (rows.isEmpty()) Color.Transparent else Pc.GlassMenu
             val room = with(density) { OptionsShadowRoom.toPx() }
             // the room round it for its shadow: a tap there closes it, as one further out does
@@ -928,8 +931,13 @@ private fun LayerOptions(open: Boolean, vm: CanvasViewModel, l: LayerInfo, rowY:
                 }.padding(OptionsShadowRoom).drawBehind { optionsShadow() },
             ) {
             Column(Modifier.width(194.dp).heightIn(min = 64.dp).clip(RoundedCornerShape(24.dp)).then(rememberFrost(24.dp)).background(tint).padding(vertical = 7.dp)) {
+                // Control layer's own choices, in the menu's place once it's tapped
+                if (choosingControl) {
+                    val kinds = listOf(null to "None", io.github.artcraftandroid.procraft.core.LayerControl.LINE_ART to "Line art", io.github.artcraftandroid.procraft.core.LayerControl.SCRIBBLE to "Scribble")
+                    for ((kind, words) in kinds) Option(words, checked = l.control == kind, enabled = true, onClick = { vm.setLayerControl(l, kind); onDone() })
+                }
                 // the core's rows: each closes the menu, a switch's too (it shows ticked next time)
-                for (r in rows) {
+                if (!choosingControl) for (r in rows) {
                     val act: () -> Unit = when (r.option) {
                         LayerOption.RENAME -> onRename
                         LayerOption.UNGROUP -> { { vm.ungroup(l) } }
@@ -949,8 +957,9 @@ private fun LayerOptions(open: Boolean, vm: CanvasViewModel, l: LayerInfo, rowY:
                         LayerOption.MERGE_DOWN -> { { vm.mergeDown(l) } }
                         LayerOption.COMBINE_DOWN -> { { vm.combineDown(l) } }
                         LayerOption.MERGE_MASK -> { { vm.mergeMask(l) } }
+                        LayerOption.CONTROL_LAYER -> { { choosingControl = true } }
                     }
-                    Option(r.label, checked = r.switchOn, enabled = r.enabled, onClick = { act(); onDone() })
+                    Option(r.label, checked = r.switchOn, enabled = r.enabled, onClick = { act(); if (r.option != LayerOption.CONTROL_LAYER) onDone() })
                 }
             }
             }

@@ -6301,6 +6301,10 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
 
     fun toggleReference(l: LayerInfo) = layerChange(thumbs = false) { it.setLayerReference(l.id, !l.reference) }
 
+    /** Makes [l] a control layer of `kind` for image generation, or (null) a plain layer again. */
+    fun setLayerControl(l: LayerInfo, kind: io.github.artcraftandroid.procraft.core.LayerControl?) =
+        layerChange(thumbs = false) { it.setLayerControl(l.id, kind) }
+
     fun toggleClipped(l: LayerInfo) = layerChange(thumbs = false) { it.setLayerClipped(l.id, !l.clipped) }
 
     /** Locks or unlocks [l], saying so in the notice band as the core words it ("Lock layer", "Unlock Layer Group"). */

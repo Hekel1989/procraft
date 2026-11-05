@@ -138,6 +138,8 @@ object GenerationUi {
     // the selection's mode as picked (none: the guess), and the selection it was picked for
     private var mode by mutableStateOf<GenerationMode?>(null)
     private var modeFor: SelectionInfo? = null
+    // each control layer's strength while the app runs, by layer id (else its kind's default)
+    private val controlStrengths = mutableStateMapOf<ULong, Float>()
     // the result held down, showing its Delete
     private var deleting by mutableStateOf<ULong?>(null)
     private var address by mutableStateOf("")
@@ -359,6 +361,27 @@ object GenerationUi {
                     }
                 }
             }
+            // control layers: one row each, its strength, and × to make it a plain layer again
+            val controls = vm.session?.let { s -> g.controlLayers(s).filter { it.visible } } ?: emptyList()
+            if (controls.isNotEmpty()) {
+                Label("CONTROL LAYERS")
+                for (c in controls) {
+                    val default = if (c.kind == io.github.artcraftandroid.procraft.core.LayerControl.LINE_ART) 0.7f else 0.5f
+                    val value = controlStrengths[c.id] ?: default
+                    Row(Modifier.padding(horizontal = 16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Image(c.thumbnail.bitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.size(36.dp).clip(RoundedCornerShape(7.dp)).background(Color.White))
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(c.name, color = Ink, fontSize = 14.sp, maxLines = 1)
+                            Text(if (c.kind == io.github.artcraftandroid.procraft.core.LayerControl.LINE_ART) "Line art" else "Scribble", color = Dim, fontSize = 12.sp)
+                        }
+                        Text("×", color = Dim, fontSize = 22.sp, modifier = Modifier.tap { vm.session?.setLayerControl(c.id, null); vm.refresh() }.padding(horizontal = 8.dp))
+                    }
+                    Box(Modifier.padding(horizontal = 6.dp)) {
+                        SliderRow("Strength", value, "${(value * 100).toInt()}%") { t -> controlStrengths[c.id] = Math.round(t * 100) / 100f }
+                    }
+                }
+            }
             // with a selection: how to fill it, the guess picked until another is
             val selection = vm.session?.let { g.selection(it) }
             if (selection != null && (modeFor?.x != selection.x || modeFor?.y != selection.y || modeFor?.width != selection.width || modeFor?.height != selection.height)) {
@@ -414,7 +437,7 @@ object GenerationUi {
                     .background(if (ready || running != null) fill else fill.copy(alpha = 0.4f))
                     .tap {
                         focus.clearFocus()
-                        if (running != null) g.cancel() else if (ready) run(vm, g, RunSettings(prompt, style, strength, seed, count.toUInt(), resolution, picked))
+                        if (running != null) g.cancel() else if (ready) run(vm, g, RunSettings(prompt, style, strength, seed, count.toUInt(), resolution, picked, controlStrengths.map { (id, v) -> io.github.artcraftandroid.procraft.core.ControlSetting(id, v) }))
                     },
                 contentAlignment = Alignment.Center,
             ) { Text(words, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold) }
