@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -129,7 +130,12 @@ object GenerationUi {
     private var generation: Generation? = null
     private var settings by mutableStateOf(GenerationSettings("", false))
     private var view by mutableStateOf(View.FORM)
-    private var prompt by mutableStateOf("")
+    // the prompt with its caret (the tag suggestions need where it is)
+    private var promptField by mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(""))
+    private var prompt: String
+        get() = promptField.text
+        set(value) { promptField = androidx.compose.ui.text.input.TextFieldValue(value, androidx.compose.ui.text.TextRange(value.length)) }
+    private var promptFocused by mutableStateOf(false)
     private var style by mutableStateOf("")
     private var strength by mutableStateOf(1f)
     private var seed by mutableStateOf<ULong?>(null)
@@ -152,7 +158,11 @@ object GenerationUi {
 
     private fun prefs(context: Context) = context.getSharedPreferences("generation", Context.MODE_PRIVATE)
 
+    // the app's context, for keeping the recent prompts after a run
+    private var appContext: Context? = null
+
     private fun generation(context: Context): Generation = generation ?: run {
+        appContext = context.applicationContext
         val p = prefs(context)
         val largest = p.getFloat("largest", 0f).takeIf { it > 0f }
         settings = GenerationSettings(p.getString("address", "") ?: "", p.getBoolean("nsfw", false), largest)
@@ -160,6 +170,7 @@ object GenerationUi {
         address = settings.address
         Generation(settings).also { g ->
             generation = g
+            g.setRecentPrompts(p.getString("recent", "")?.split('\n')?.filter { it.isNotBlank() } ?: emptyList())
             opened?.let { (s, f) -> g.setFolder(s, f) }
         }
     }
@@ -247,7 +258,12 @@ object GenerationUi {
         // above the keyboard while it's up: the form scrolls, Generate stays in view
         val ime = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
         val screen = LocalConfiguration.current.screenHeightDp.dp
-        val room = if (ime > 0.dp) Modifier.heightIn(max = screen - Pc.BarHeight - ime - 12.dp) else Modifier
+        // above the results bar too while it shows (96 tall, 22 above the screen's foot), not under it
+        val room = when {
+            ime > 0.dp -> Modifier.heightIn(max = screen - Pc.BarHeight - ime - 12.dp)
+            hasResults() -> Modifier.heightIn(max = screen - Pc.BarHeight - 96.dp - 22.dp - 34.dp)
+            else -> Modifier
+        }
         Popover(400.dp, arrowX, modifier.then(room)) {
             when {
                 view == View.SERVER -> ServerView(context, g)
@@ -314,9 +330,9 @@ object GenerationUi {
             Box(Modifier.padding(horizontal = 16.dp).fillMaxWidth().heightIn(min = 82.dp).clip(RoundedCornerShape(12.dp)).background(Field).padding(horizontal = 12.dp, vertical = 10.dp)) {
                 if (prompt.isEmpty()) Text("Describe it, or type tags…", color = Pc.Disabled, fontSize = 15.sp)
                 BasicTextField(
-                    prompt,
-                    onValueChange = { prompt = it },
-                    modifier = Modifier.fillMaxWidth(),
+                    promptField,
+                    onValueChange = { promptField = it },
+                    modifier = Modifier.fillMaxWidth().onFocusChanged { promptFocused = it.isFocused },
                     textStyle = TextStyle(color = Ink, fontSize = 15.sp),
                     cursorBrush = SolidColor(Pc.Accent),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
@@ -324,6 +340,8 @@ object GenerationUi {
                     maxLines = 6,
                 )
             }
+            // suggestions for the tag being typed, or (field empty) the recent prompts
+            if (promptFocused) TagStrip(g)
             Spacer(Modifier.height(8.dp))
             // strength: the last stretch snaps to a new image
             Box(Modifier.padding(horizontal = 6.dp)) {
@@ -451,6 +469,7 @@ object GenerationUi {
         error = try {
             g.generate(s, run)
             last = run
+            appContext?.let { c -> prefs(c).edit().putString("recent", g.recentPrompts().joinToString("\n") { it.replace('\n', ' ') }).apply() }
             null
         } catch (e: GenerationException) {
             e.message
@@ -546,6 +565,46 @@ object GenerationUi {
             Text("Pictures and prompts go to this server and nowhere else.", color = Dim, fontSize = 12.5.sp)
             server?.licence?.takeIf { it.isNotEmpty() }?.let { Text("Anima: $it", color = Dim, fontSize = 12.5.sp) }
         }
+    }
+
+    /** Chips under the prompt: tags for the word being typed (tap to complete), else recent prompts. */
+    @Composable
+    private fun TagStrip(g: Generation) {
+        val caret = promptField.selection.end
+        val suggestions = remember(promptField.text, caret, settings.nsfw) { g.suggestTags(promptField.text, caret.toUInt()) }
+        val recent = if (prompt.isEmpty()) remember(prompt) { g.recentPrompts() } else emptyList()
+        if (suggestions.isEmpty() && recent.isEmpty()) return
+        Row(Modifier.padding(top = 8.dp).horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            suggestions.forEachIndexed { i, t ->
+                Row(
+                    Modifier.height(32.dp).clip(RoundedCornerShape(10.dp)).background(RowFill)
+                        .tap {
+                            val done = g.completeTag(promptField.text, caret.toUInt(), i.toUInt())
+                            promptField = androidx.compose.ui.text.input.TextFieldValue(done.text, androidx.compose.ui.text.TextRange(done.caret.toInt()))
+                        }.padding(horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(kindColour(t.kind)))
+                    Spacer(Modifier.width(6.dp))
+                    Text(t.tag, color = Ink, fontSize = 13.sp, maxLines = 1)
+                    Spacer(Modifier.width(6.dp))
+                    Text(t.count, color = Dim, fontSize = 11.sp, maxLines = 1)
+                }
+            }
+            for (r in recent) {
+                Box(Modifier.height(32.dp).widthIn(max = 220.dp).clip(RoundedCornerShape(10.dp)).background(RowFill).tap { prompt = r }.padding(horizontal = 10.dp), contentAlignment = Alignment.CenterStart) {
+                    Text(r, color = Ink, fontSize = 13.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+
+    private fun kindColour(kind: io.github.artcraftandroid.procraft.core.TagKind) = when (kind) {
+        io.github.artcraftandroid.procraft.core.TagKind.GENERAL -> Color(0xFF8E8E93)
+        io.github.artcraftandroid.procraft.core.TagKind.ARTIST -> Color(0xFFE85D75)
+        io.github.artcraftandroid.procraft.core.TagKind.COPYRIGHT -> Color(0xFFF2B440)
+        io.github.artcraftandroid.procraft.core.TagKind.CHARACTER -> Color(0xFF55C98A)
+        io.github.artcraftandroid.procraft.core.TagKind.META -> Color(0xFFA57BFF)
     }
 
     /** The small text under the resolution row: what will be made, and how. */
