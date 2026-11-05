@@ -74,6 +74,8 @@ import io.github.artcraftandroid.procraft.core.GenerationException
 import io.github.artcraftandroid.procraft.core.GenerationSettings
 import io.github.artcraftandroid.procraft.core.GenerationState
 import io.github.artcraftandroid.procraft.core.RunSettings
+import io.github.artcraftandroid.procraft.core.GenerationResolution
+import io.github.artcraftandroid.procraft.core.SizeInfo
 import io.github.artcraftandroid.procraft.core.ServerConnection
 import io.github.artcraftandroid.procraft.core.ServerStatus
 import io.github.artcraftandroid.procraft.core.ThumbnailImage
@@ -126,6 +128,7 @@ object GenerationUi {
     private var strength by mutableStateOf(1f)
     private var seed by mutableStateOf<ULong?>(null)
     private var count by mutableStateOf(1)
+    private var resolution by mutableStateOf(GenerationResolution.QUALITY)
     private var address by mutableStateOf("")
     private var state by mutableStateOf(GenerationState(null, emptyList(), null, null))
     private var server by mutableStateOf<ServerStatus?>(null)
@@ -138,13 +141,16 @@ object GenerationUi {
 
     private fun generation(context: Context): Generation = generation ?: run {
         val p = prefs(context)
-        settings = GenerationSettings(p.getString("address", "") ?: "", p.getBoolean("nsfw", false))
+        val largest = p.getFloat("largest", 0f).takeIf { it > 0f }
+        settings = GenerationSettings(p.getString("address", "") ?: "", p.getBoolean("nsfw", false), largest)
+        resolution = GenerationResolution.entries.firstOrNull { it.name == p.getString("resolution", null) } ?: GenerationResolution.QUALITY
         address = settings.address
         Generation(settings).also { generation = it }
     }
 
     private fun keep(context: Context) {
-        prefs(context).edit().putString("address", settings.address).putBoolean("nsfw", settings.nsfw).apply()
+        prefs(context).edit().putString("address", settings.address).putBoolean("nsfw", settings.nsfw)
+            .putFloat("largest", settings.largestMegapixels ?: 0f).putString("resolution", resolution.name).apply()
         generation(context).setSettings(settings)
     }
 
@@ -316,6 +322,22 @@ object GenerationUi {
                     }
                 }
             }
+            // resolution: Draft, Normal, Quality, and what that makes in small text
+            val context = LocalContext.current
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp).fillMaxWidth().height(40.dp).clip(RoundedCornerShape(12.dp)).background(RowFill).padding(3.dp)) {
+                for ((choice, words) in listOf(GenerationResolution.DRAFT to "Draft", GenerationResolution.NORMAL to "Normal", GenerationResolution.QUALITY to "Quality")) {
+                    val on = resolution == choice
+                    Box(
+                        Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(9.dp)).background(if (on) Pc.Accent else Color.Transparent)
+                            .tap { resolution = choice; keep(context) },
+                        contentAlignment = Alignment.Center,
+                    ) { Text(words, color = if (on) Color.White else Dim, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
+                }
+            }
+            vm.session?.let { session ->
+                val size = g.sizeFor(session, resolution)
+                Text(planText(size, server?.largestMegapixels ?: 0f), color = Dim, fontSize = 12.sp, modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 4.dp))
+            }
         }
         Column(Modifier.padding(bottom = 16.dp)) {
             // Generate, or Cancel while a run goes
@@ -332,7 +354,7 @@ object GenerationUi {
                     .background(if (ready || running != null) fill else fill.copy(alpha = 0.4f))
                     .tap {
                         focus.clearFocus()
-                        if (running != null) g.cancel() else if (ready) run(vm, g, RunSettings(prompt, style, strength, seed, count.toUInt()))
+                        if (running != null) g.cancel() else if (ready) run(vm, g, RunSettings(prompt, style, strength, seed, count.toUInt(), resolution))
                     },
                 contentAlignment = Alignment.Center,
             ) { Text(words, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold) }
@@ -417,6 +439,18 @@ object GenerationUi {
                     for (d in details) Text(d, color = Dim, fontSize = 12.sp, modifier = Modifier.padding(start = 12.dp, bottom = 4.dp))
                 }
             }
+            Row(Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(14.dp)).background(RowFill).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Largest picture", color = Ink, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                val current = settings.largestMegapixels ?: server?.largestMegapixels ?: 2f
+                fun set(mp: Float?) { settings = settings.copy(largestMegapixels = mp); keep(context); poll(g) }
+                Text("−", color = Dim, fontSize = 22.sp, modifier = Modifier.tap { set((current - 0.5f).coerceAtLeast(1f)) }.padding(horizontal = 10.dp))
+                Text(
+                    if (settings.largestMegapixels == null) "${megapixels(current)} MP · GPU" else "${megapixels(current)} MP",
+                    color = Ink, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.width(96.dp).tap { if (settings.largestMegapixels != null) set(null) },
+                )
+                Text("+", color = Dim, fontSize = 22.sp, modifier = Modifier.tap { set((current + 0.5f).coerceAtMost(16f)) }.padding(horizontal = 10.dp))
+            }
             Row(
                 Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(14.dp)).background(RowFill)
                     .tap { settings = settings.copy(nsfw = !settings.nsfw); keep(context) }.padding(horizontal = 16.dp),
@@ -429,6 +463,20 @@ object GenerationUi {
             server?.licence?.takeIf { it.isNotEmpty() }?.let { Text("Anima: $it", color = Dim, fontSize = 12.5.sp) }
         }
     }
+
+    /** The small text under the resolution row: what will be made, and how. */
+    private fun planText(size: SizeInfo, largest: Float): String {
+        var words = "${size.width} × ${size.height}"
+        words += when {
+            size.passes > 1u -> " · ${size.passes} passes"
+            size.scaledUp -> " → scaled up"
+            else -> " · 1 pass"
+        }
+        if (size.capped) words += " · capped at ${megapixels(largest)} MP"
+        return words
+    }
+
+    private fun megapixels(mp: Float) = if (Math.abs(mp - Math.round(mp)) < 0.01f) "${Math.round(mp)}" else "%.1f".format(mp)
 
     private data class Line(val name: String, val mark: String, val colour: Color, val details: List<String>)
 
@@ -492,6 +540,7 @@ object GenerationUi {
                 Box(Modifier.clip(RoundedCornerShape(10.dp)).background(RowFill).tap { seed = r.seed }.padding(horizontal = 10.dp, vertical = 7.dp)) {
                     Text("seed ${r.seed}", color = Dim, fontSize = 12.sp)
                 }
+                if (r.scaledFromWidth > 0u) Text("scaled up from\n${r.scaledFromWidth} × ${r.scaledFromHeight}", color = Dim, fontSize = 11.sp, lineHeight = 13.sp)
             }
             Pill("Again", primary = false, enabled = last != null && state.running == null) { last?.let { run(vm, g, it) } }
             Pill("Apply", primary = true, enabled = target != null) {
