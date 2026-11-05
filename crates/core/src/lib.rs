@@ -27,6 +27,8 @@ mod crop_edit;
 mod device;
 mod frame;
 mod gallery;
+#[cfg(feature = "generation")]
+mod generation;
 mod gestures;
 mod gradients;
 mod guide;
@@ -99,6 +101,11 @@ pub use colour_drag::{ColourDrag, DragStep};
 pub use crop_edit::CropShown;
 pub use frame::{configure, screen_profile};
 pub use gallery::{ArtworkStore, GalleryArtwork, GalleryEntry, ZipKind, zip_file_kind};
+#[cfg(feature = "generation")]
+pub use generation::{
+    FeatureStatus, Generation, GenerationError, GenerationFeature, GenerationSettings, GenerationState, ResultInfo,
+    RunInfo, RunSettings, ServerConnection, ServerStatus, StyleInfo, generation_address,
+};
 pub use gestures::{
     GestureOption, GesturePurpose, GestureSettings, KeptGestures, MAX_DELAY_S, MIN_DELAY_S, Trigger, gesture_options,
     gesture_purpose_heading, gesture_purpose_title, gesture_purposes, gesture_trigger_label,

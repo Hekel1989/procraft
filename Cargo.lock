@@ -3125,6 +3125,7 @@ dependencies = [
  "parking_lot",
  "png",
  "pollster",
+ "procraft-diffusion",
  "procraft-engine",
  "procraft-gpu",
  "raw-window-handle",

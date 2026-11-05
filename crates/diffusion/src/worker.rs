@@ -77,6 +77,8 @@ pub struct RunState {
     pub progress: f32,
     /// The latest sampling preview, if the server sends them.
     pub preview: Option<Picture>,
+    /// How many previews have come, to tell a new one from the last.
+    pub previews: u32,
     /// The pictures made so far.
     pub results: Vec<RunResult>,
     /// Why it stopped early, if it did.
@@ -436,6 +438,7 @@ fn follow(
                     && let Some(run) = on.shared.inner.lock().runs.get_mut(&on.id)
                 {
                     run.preview = Some(preview);
+                    run.previews += 1;
                 }
             }
             Event::Succeeded { prompt_id: p } if p == prompt_id => return Ok(made),
