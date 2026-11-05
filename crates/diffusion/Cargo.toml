@@ -1,0 +1,28 @@
+[package]
+name = "procraft-diffusion"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Image generation for ProCraft: requests, model families and their ComfyUI graphs, and the client that runs them on a ComfyUI server (no UI, no GPU)"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "diffusion-cli"
+path = "src/bin/diffusion_cli.rs"
+
+[dependencies]
+procraft-engine = { workspace = true }
+log = { workspace = true }
+parking_lot = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# plain HTTP and WebSocket to a server on the LAN, blocking, on the worker's thread: no TLS, no
+# async runtime
+ureq = { version = "3.5", default-features = false }
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
