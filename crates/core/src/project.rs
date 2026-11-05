@@ -4,6 +4,8 @@
 //! - `layers/<id>.png`: each layer's pixels, premultiplied RGBA8 stored losslessly in a PNG (an
 //!   internal store, not for other apps).
 //! - `thumbnail.png`: the picture at up to [`THUMBNAIL_SIDE`] pixels, for the gallery.
+//! - `generation/`: image generation's kept results (see generation.rs). Private to the app: no
+//!   export reads it, and an app built without the `generation` feature leaves it alone.
 //!
 //! Files are written beside their final name and renamed into place, so an interrupted save
 //! leaves the previous version whole.

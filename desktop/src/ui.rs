@@ -290,6 +290,10 @@ impl Interface {
         session.set_touch_settings(self.gestures.touch_settings(self.prefs.rapid_undo_ms()));
         session.use_gradients(self.gradients.clone());
         self.prefs.apply(session);
+        #[cfg(feature = "generation")]
+        if let Some(dir) = &self.artwork_dir {
+            self.generation.set_folder(session, dir.clone());
+        }
         self.time_lapse.open(self.artwork_dir.as_deref(), session.edits());
         self.adjustments.menu_at = None;
         self.colours.send(session);
