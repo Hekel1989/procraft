@@ -2550,24 +2550,21 @@ fn a_layer_s_options_follow_what_it_is() {
     assert!(!options(top).contains(&O::DrawingAssist));
     s.set_guide_on(true);
     s.set_guide_on(false);
-    assert_eq!(
-        options(top),
-        [
-            O::Rename,
-            O::Select,
-            O::Copy,
-            O::Fill,
-            O::Clear,
-            O::AlphaLock,
-            O::Mask,
-            O::ClippingMask,
-            O::DrawingAssist,
-            O::Invert,
-            O::Reference,
-            O::MergeDown,
-            O::CombineDown
-        ]
-    );
+    let mut paint_rows = vec![
+        O::Rename,
+        O::Select,
+        O::Copy,
+        O::Fill,
+        O::Clear,
+        O::AlphaLock,
+        O::Mask,
+        O::ClippingMask,
+        O::DrawingAssist,
+    ];
+    #[cfg(feature = "generation")]
+    paint_rows.push(O::ControlLayer);
+    paint_rows.extend([O::Invert, O::Reference, O::MergeDown, O::CombineDown]);
+    assert_eq!(options(top), paint_rows);
     // the bottom one has nothing to merge into or clip to
     assert!(!options(bottom).contains(&O::MergeDown) && !options(bottom).contains(&O::ClippingMask));
     // nor is anything merged or combined onto a locked one, as measured
@@ -2580,7 +2577,11 @@ fn a_layer_s_options_follow_what_it_is() {
     assert_eq!(row(top, O::Fill).switch_on, None);
     // locked, as measured: only what leaves its pixels, name and place as they are
     assert!(s.set_layer_locked(top, true));
-    assert_eq!(options(top), [O::Select, O::Copy, O::Mask, O::ClippingMask, O::DrawingAssist, O::Reference]);
+    let mut locked_rows = vec![O::Select, O::Copy, O::Mask, O::ClippingMask, O::DrawingAssist];
+    #[cfg(feature = "generation")]
+    locked_rows.push(O::ControlLayer);
+    locked_rows.push(O::Reference);
+    assert_eq!(options(top), locked_rows);
     // with a mask, no second one: Merge Mask last instead; the mask's own menu is short
     let mask = s.add_mask(bottom).unwrap();
     let with_mask = options(bottom);

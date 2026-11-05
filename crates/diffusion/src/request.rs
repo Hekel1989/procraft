@@ -16,6 +16,23 @@ pub enum SelectionMode {
     Expand,
 }
 
+/// What a layer's lines are like: clean line art, followed closely, or rough scribbles, followed
+/// loosely.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ControlKind {
+    LineArt,
+    Scribble,
+}
+
+/// A layer's pixels to guide generation with: its picture at the request's area (straight RGBA,
+/// white lines on black), its kind and how strongly to follow it (0..1).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Control {
+    pub kind: ControlKind,
+    pub strength: f32,
+    pub picture: Picture,
+}
+
 /// A selection to generate into: its mask cropped to the context box (one byte per pixel, white
 /// selected) and the mode.
 #[derive(Clone, Debug, PartialEq)]
@@ -40,6 +57,8 @@ pub struct Request {
     pub picture: Option<Picture>,
     /// The selection to generate into, if any.
     pub selection: Option<Selection>,
+    /// The layers' lines to follow, each with its strength (none: no control layers).
+    pub controls: Vec<Control>,
     /// The area's size in canvas pixels: results are scaled to this size at the end.
     pub size: (u32, u32),
     /// How large to make the picture before scaling it to [`size`](Self::size).

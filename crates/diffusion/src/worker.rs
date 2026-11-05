@@ -368,6 +368,10 @@ fn run(
     if !missing.is_empty() {
         return Err(Error::Missing(missing));
     }
+    let controls = Readiness::check(family, models).missing(Feature::ControlLayers).to_vec();
+    if !request.controls.is_empty() && !controls.is_empty() {
+        return Err(Error::Missing(controls));
+    }
     let (width, height) = request.size;
     let vram = on.shared.inner.lock().server.stats.as_ref().and_then(|s| s.gpu.as_ref()).map_or(0, |(_, bytes)| *bytes);
     let largest = request.largest.unwrap_or_else(|| largest_for_vram(vram)).min(family.most_megapixels());

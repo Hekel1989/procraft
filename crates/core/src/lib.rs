@@ -103,9 +103,9 @@ pub use frame::{configure, screen_profile};
 pub use gallery::{ArtworkStore, GalleryArtwork, GalleryEntry, ZipKind, zip_file_kind};
 #[cfg(feature = "generation")]
 pub use generation::{
-    FeatureStatus, Generation, GenerationError, GenerationFeature, GenerationMode, GenerationResolution,
-    GenerationSettings, GenerationState, ResultInfo, RunInfo, RunSettings, SelectionInfo, ServerConnection,
-    ServerStatus, SizeInfo, StyleInfo, generation_address,
+    ControlLayerInfo, ControlSetting, FeatureStatus, Generation, GenerationError, GenerationFeature, GenerationMode,
+    GenerationResolution, GenerationSettings, GenerationState, ResultInfo, RunInfo, RunSettings, SelectionInfo,
+    ServerConnection, ServerStatus, SizeInfo, StyleInfo, generation_address,
 };
 pub use gestures::{
     GestureOption, GesturePurpose, GestureSettings, KeptGestures, MAX_DELAY_S, MIN_DELAY_S, Trigger, gesture_options,
@@ -117,8 +117,8 @@ pub use history::ColourHistory;
 pub use hues::{HueControl, RING_HUES, SLIDER_HUES, hue_at, hue_position, hue_stops};
 pub use keys::{KeyCombo, KeyDrag, KeyShortcut, ShortcutGroup, ShortcutRow, key_shortcut, key_shortcut_list};
 pub use layers::{
-    BlendModeInfo, Blocked, LayerInfo, LayerOption, LayerOptionRow, LayerType, ThumbnailImage, blend_modes,
-    brush_blend_modes, grain_blend_modes, layers_for, set_resident_budget,
+    BlendModeInfo, Blocked, LayerControl, LayerInfo, LayerOption, LayerOptionRow, LayerType, ThumbnailImage,
+    blend_modes, brush_blend_modes, grain_blend_modes, layers_for, set_resident_budget,
 };
 pub use modes::{ModeButton, ModeSwitch, Modes, mode_switch};
 pub use palettes::{PaletteInfo, Palettes, colour_name};

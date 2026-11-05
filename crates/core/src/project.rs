@@ -1409,6 +1409,7 @@ pub fn import_pages(
             text: None,
             private: false,
             assisted: false,
+            control: None,
         });
     }
     let mut doc = Document::from_layers(w, h, layers, LayerId(1));

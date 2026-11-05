@@ -10,8 +10,9 @@ use std::time::Duration;
 
 use egui::{Align2, Color32, Id, Order, Rect, Sense, TextureHandle, TextureOptions, Ui, UiBuilder, pos2, vec2};
 use procraft_core::{
-    CanvasSession, Generation, GenerationMode, GenerationResolution, GenerationSettings, GenerationState, RunSettings,
-    SelectionInfo, ServerConnection, ServerStatus, SizeInfo, ThumbnailImage,
+    CanvasSession, ControlLayerInfo, ControlSetting, Generation, GenerationMode, GenerationResolution,
+    GenerationSettings, GenerationState, LayerControl, RunSettings, SelectionInfo, ServerConnection, ServerStatus,
+    SizeInfo, ThumbnailImage,
 };
 
 use crate::icons::{self, Icon, Part};
@@ -45,6 +46,8 @@ const OK: u32 = 0xFF3CCF6E;
 const WARN: u32 = 0xFFF2B440;
 const BAD: u32 = 0xFFE84F51;
 const THUMB: f32 = 66.0;
+/// A control layer's row in the form.
+const CONTROL_ROW: f32 = 48.0;
 /// The results bar's ‹ and › when it's scrolled.
 const CHEVRON: f32 = 24.0;
 /// How long a thumbnail is held, in seconds, before its Delete shows.
@@ -102,6 +105,12 @@ pub struct GenerationUi {
     deleting: Option<u64>,
     /// The last run's settings, for Again.
     last: Option<RunSettings>,
+    /// The control layers the popover lists, their pictures, and the strength each was given while
+    /// the app runs.
+    controls: Vec<ControlLayerInfo>,
+    control_signature: Vec<(u64, String, Option<LayerControl>, bool, u64)>,
+    control_pictures: HashMap<u64, TextureHandle>,
+    control_strengths: HashMap<u64, f32>,
 }
 
 impl GenerationUi {
@@ -149,6 +158,10 @@ impl GenerationUi {
             back: 0,
             deleting: None,
             last: None,
+            controls: Vec::new(),
+            control_signature: Vec::new(),
+            control_pictures: HashMap::new(),
+            control_strengths: HashMap::new(),
         }
     }
 
@@ -164,6 +177,34 @@ impl GenerationUi {
         self.thumbnails.retain(|id, _| ids.contains(id));
         for r in &self.state.results {
             self.thumbnails.entry(r.id).or_insert_with(|| texture(ctx, &format!("result {}", r.id), &r.thumbnail));
+        }
+    }
+
+    /// Reads the artwork's control layers again when one is made, painted on, changed, hidden or
+    /// removed, and keeps their pictures; a layer's strength stays while the app runs.
+    fn refresh_controls(&mut self, ctx: &egui::Context, session: &CanvasSession) {
+        let layers = session.layers();
+        let versions: HashMap<u64, u64> = if layers.iter().any(|l| l.control.is_some()) {
+            session.layer_versions().into_iter().map(|v| (v.id, v.version)).collect()
+        } else {
+            HashMap::new()
+        };
+        let signature: Vec<(u64, String, Option<LayerControl>, bool, u64)> = layers
+            .into_iter()
+            .filter(|l| l.control.is_some())
+            .map(|l| (l.id, l.name, l.control, l.visible, versions.get(&l.id).copied().unwrap_or(0)))
+            .collect();
+        if signature == self.control_signature {
+            return;
+        }
+        self.control_signature = signature;
+        self.controls = self.generation.control_layers(session);
+        let ids: Vec<u64> = self.controls.iter().map(|c| c.id).collect();
+        self.control_pictures.retain(|id, _| ids.contains(id));
+        for control in &self.controls {
+            self.control_pictures
+                .entry(control.id)
+                .or_insert_with(|| texture(ctx, &format!("control {}", control.id), &control.thumbnail));
         }
     }
 
@@ -206,6 +247,7 @@ impl GenerationUi {
         let screen = ctx.content_rect();
         let (left, arrow_x) = panel::place(ctx, WIDTH, button.center().x);
         let top = screen.top() + pc::BAR_HEIGHT;
+        self.refresh_controls(ctx, session);
         self.selection = self.generation.selection(session);
         let area = self.selection.map(|s| (s.x, s.y, s.width, s.height));
         if area != self.selection_area {
@@ -235,7 +277,9 @@ impl GenerationUi {
     fn form_height(&self) -> f32 {
         let error = if self.state.error.is_some() { 40.0 } else { 0.0 };
         let selection = if self.selection.is_some() { 70.0 } else { 0.0 };
-        56.0 + 22.0 + 84.0 + 22.0 + 90.0 + selection + 54.0 + 52.0 + 22.0 + 46.0 + 24.0 + 60.0 + error + PAD
+        let controls =
+            if self.controls.is_empty() { 0.0 } else { 22.0 + CONTROL_ROW * self.controls.len() as f32 + 4.0 };
+        56.0 + 22.0 + 84.0 + 22.0 + 90.0 + controls + selection + 54.0 + 52.0 + 22.0 + 46.0 + 24.0 + 60.0 + error + PAD
     }
 
     fn server_height(&self) -> f32 {
@@ -358,6 +402,84 @@ impl GenerationUi {
         let response = edit.show(&mut ui.new_child(UiBuilder::new().max_rect(inner))).response;
         let enter = response.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         y += 90.0;
+        // control layers: one row each, its picture, what it is, how strongly to follow it, and a
+        // × to stop using the layer as one
+        if !self.controls.is_empty() {
+            label(ui, pos2(left + 2.0, y), "CONTROL LAYERS");
+            y += 22.0;
+            let controls = self.controls.clone();
+            let mut removed = None;
+            for control in &controls {
+                let row = Rect::from_min_max(pos2(left, y), pos2(right, y + CONTROL_ROW));
+                ui.painter().rect_filled(row, 10.0, argb(ROW));
+                let thumb = Rect::from_min_size(pos2(row.left() + 5.0, row.center().y - 19.0), vec2(38.0, 38.0));
+                ui.painter().rect_filled(thumb, 5.0, argb(FIELD));
+                if let Some(t) = self.control_pictures.get(&control.id) {
+                    let shown = fit(thumb.shrink(1.0), t.size_vec2());
+                    ui.painter().image(
+                        t.id(),
+                        shown,
+                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                }
+                let ink = if control.visible { argb(INK) } else { argb(DIM) };
+                text(
+                    ui.painter(),
+                    pos2(thumb.right() + 10.0, row.top() + 16.0),
+                    Align2::LEFT_CENTER,
+                    &control.name,
+                    14.0,
+                    Weight::Medium,
+                    ink,
+                );
+                let kind = match control.kind {
+                    LayerControl::LineArt => "Line art",
+                    LayerControl::Scribble => "Scribble",
+                };
+                let kind = if control.visible { kind.to_owned() } else { format!("{kind} · hidden") };
+                text(
+                    ui.painter(),
+                    pos2(thumb.right() + 10.0, row.top() + 32.0),
+                    Align2::LEFT_CENTER,
+                    &kind,
+                    11.0,
+                    Weight::Regular,
+                    argb(DIM),
+                );
+                let strength =
+                    self.control_strengths.entry(control.id).or_insert_with(|| default_control_strength(control.kind));
+                let percent = format!("{:.0}%", *strength * 100.0);
+                text(
+                    ui.painter(),
+                    pos2(row.right() - 52.0, row.top() + 14.0),
+                    Align2::RIGHT_CENTER,
+                    &percent,
+                    12.0,
+                    Weight::Regular,
+                    argb(DIM),
+                );
+                let track = Rect::from_min_max(
+                    pos2(row.right() - 146.0, row.center().y + 9.0),
+                    pos2(row.right() - 52.0, row.center().y + 12.0),
+                );
+                if let Some(v) = slider(ui, look, track, *strength, &format!("control strength {}", control.id)) {
+                    *strength = (v * 100.0).round() / 100.0;
+                }
+                let remove = Rect::from_center_size(pos2(row.right() - 22.0, row.center().y), vec2(30.0, 30.0));
+                text(ui.painter(), remove.center(), Align2::CENTER_CENTER, "×", 20.0, Weight::Regular, argb(DIM));
+                if ui.interact(remove, ui.scope_id().with(("control off", control.id)), Sense::click()).clicked() {
+                    removed = Some(control.id);
+                }
+                y += CONTROL_ROW;
+            }
+            if let Some(id) = removed {
+                session.set_layer_control(id, None);
+                self.controls.retain(|c| c.id != id);
+                self.control_pictures.remove(&id);
+            }
+            y += 4.0;
+        }
         // the selection's mode, the guessed one until the user picks another
         if let Some(selection) = self.selection {
             let chosen = self.mode.unwrap_or(selection.mode);
@@ -530,6 +652,19 @@ impl GenerationUi {
 
     /// Starts a run with the form's settings (a new seed unless one is kept, or `seed`).
     fn run(&mut self, session: &CanvasSession, seed: Option<u64>) {
+        let controls = self
+            .controls
+            .iter()
+            .filter(|c| c.visible)
+            .map(|c| ControlSetting {
+                layer: c.id,
+                strength: self
+                    .control_strengths
+                    .get(&c.id)
+                    .copied()
+                    .unwrap_or_else(|| default_control_strength(c.kind)),
+            })
+            .collect();
         let run = RunSettings {
             prompt: self.prompt.clone(),
             style: self.style.clone(),
@@ -538,6 +673,7 @@ impl GenerationUi {
             count: self.count,
             resolution: Some(self.resolution),
             mode: self.mode,
+            controls,
         };
         match self.generation.generate(session, run.clone()) {
             Ok(_) => self.last = Some(run),
@@ -1058,6 +1194,14 @@ fn texture(ctx: &egui::Context, name: &str, image: &ThumbnailImage) -> TextureHa
     let size = [image.width as usize, image.height as usize];
     let picture = egui::ColorImage::from_rgba_premultiplied(size, &image.rgba);
     ctx.load_texture(name, picture, TextureOptions::LINEAR)
+}
+
+/// How strongly a control layer is followed unless its slider says otherwise.
+fn default_control_strength(kind: LayerControl) -> f32 {
+    match kind {
+        LayerControl::LineArt => 0.7,
+        LayerControl::Scribble => 0.5,
+    }
 }
 
 /// The small text under the resolution row: what will be made, and how.

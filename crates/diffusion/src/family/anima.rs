@@ -8,7 +8,7 @@ use serde_json::json;
 use super::ModelKind;
 use crate::comfy::ServerModels;
 use crate::plan::Plan;
-use crate::{Error, Family, Graph, Out, Picture, Request, SelectionMode};
+use crate::{ControlKind, Error, Family, Graph, Out, Picture, Request, SelectionMode};
 
 pub(super) const NATIVE_PIXELS: u32 = 1024 * 1024;
 /// How much the second pass of a two-pass picture changes it: enough to add detail, too little to
@@ -19,6 +19,10 @@ pub(super) const SECOND_PASS_DENOISE: f64 = 0.3;
 pub(super) const MOST_MEGAPIXELS: f32 = 3.0;
 /// The inpaint control's strength: the LLLite layer follows the mask whole.
 pub(super) const INPAINT_CONTROL_STRENGTH: f64 = 1.0;
+/// How far through sampling a control layer's lines are followed: line art to the end, scribbles
+/// only for the first four fifths, when they have shaped the picture enough.
+const LINE_ART_END: f64 = 1.0;
+const SCRIBBLE_END: f64 = 0.8;
 /// How much the last colour match pulls a selection's result towards the original: enough to blend
 /// it in, not enough to undo the generated colours.
 pub(super) const COLOR_MATCH: f64 = 0.5;
@@ -66,6 +70,32 @@ pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerMod
     let checkpoint = g.add("UNETLoader", [("unet_name", json!(style.checkpoint)), ("weight_dtype", json!("default"))]);
     let clip = g.add("CLIPLoader", [("clip_name", json!(file(ModelKind::TextEncoder)?)), ("type", json!("omnigen2"))]);
     let vae = g.add("VAELoader", [("vae_name", json!(file(ModelKind::Vae)?))]);
+    // each control layer's lines on the model before sampling, its picture at `width × height`
+    let with_controls = |g: &mut Graph, mut model: Out, width: u32, height: u32| -> Result<Out, Error> {
+        for control in &request.controls {
+            let png = control.picture.resized(width, height)?.to_png()?;
+            let image = g.add("ETN_LoadImageBase64", [("image", json!(procraft_engine::base64::encode(&png)))]);
+            let load =
+                g.add("ETN_control_load", [("model", model.into()), ("weights", json!(file(ModelKind::LineControl)?))]);
+            let end = match control.kind {
+                ControlKind::LineArt => LINE_ART_END,
+                ControlKind::Scribble => SCRIBBLE_END,
+            };
+            let apply = g.add(
+                "ETN_control_apply",
+                [
+                    ("model", load.out(0).into()),
+                    ("control_net", load.out(1).into()),
+                    ("image", image.out(0).into()),
+                    ("strength", json!(control.strength.clamp(0.0, 1.0))),
+                    ("start_percent", json!(0.0)),
+                    ("end_percent", json!(end)),
+                ],
+            );
+            model = apply.out(0);
+        }
+        Ok(model)
+    };
     let text =
         |g: &mut Graph, text: String| g.add("CLIPTextEncode", [("clip", clip.out(0).into()), ("text", json!(text))]);
     let selection = request.selection.as_ref();
@@ -77,7 +107,7 @@ pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerMod
     } else {
         text(&mut g, style.negative.clone())
     };
-    let mut model: Out = checkpoint.out(0);
+    let base: Out = checkpoint.out(0);
     let sampler = |g: &mut Graph, model: Out, latent: Out, denoise: f64| {
         g.add(
             "KSampler",
@@ -107,6 +137,7 @@ pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerMod
             });
         }
         let (width, height) = (plan.first.width, plan.first.height);
+        let model = with_controls(&mut g, base, width, height)?;
         let original = picture.flattened([255, 255, 255]).resized(width, height)?.to_png()?;
         let original = g.add("ETN_LoadImageBase64", [("image", json!(procraft_engine::base64::encode(&original)))]);
         let mask = Picture::resized_mask(request.size.0, request.size.1, &selection.mask, width, height)?;
@@ -138,10 +169,8 @@ pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerMod
                 ("falloff", json!(0)),
             ],
         );
-        let control = g.add(
-            "ETN_control_load",
-            [("model", checkpoint.out(0).into()), ("weights", json!(file(ModelKind::InpaintControl)?))],
-        );
+        let control =
+            g.add("ETN_control_load", [("model", model.into()), ("weights", json!(file(ModelKind::InpaintControl)?))]);
         let controlled = g.add(
             "ETN_control_apply",
             [
@@ -154,7 +183,7 @@ pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerMod
                 ("end_percent", json!(1.0)),
             ],
         );
-        model = controlled.out(0);
+        let model = controlled.out(0);
         let encoded = g.add("VAEEncode", [("pixels", filled.out(0).into()), ("vae", vae.out(0).into())]);
         let latent = g.add("SetLatentNoiseMask", [("samples", encoded.out(0).into()), ("mask", grown.out(0).into())]);
         let sampled = sampler(&mut g, model, latent.into(), f64::from(request.strength.clamp(0.01, 1.0)));
@@ -198,8 +227,9 @@ pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerMod
         )
         .into()
     };
+    let first_model = with_controls(&mut g, base, plan.first.width, plan.first.height)?;
     let sampled =
-        sampler(&mut g, model, latent, if refine { f64::from(request.strength.clamp(0.01, 1.0)) } else { 1.0 });
+        sampler(&mut g, first_model, latent, if refine { f64::from(request.strength.clamp(0.01, 1.0)) } else { 1.0 });
     let mut image = g.add("VAEDecode", [("samples", sampled.out(0).into()), ("vae", vae.out(0).into())]);
     if let Some(second) = plan.second.filter(|_| !refine) {
         let scaled = g.add(
@@ -213,7 +243,8 @@ pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerMod
             ],
         );
         let encoded = g.add("VAEEncode", [("pixels", scaled.out(0).into()), ("vae", vae.out(0).into())]);
-        let refined = sampler(&mut g, model, encoded.into(), SECOND_PASS_DENOISE);
+        let second_model = with_controls(&mut g, base, second.width, second.height)?;
+        let refined = sampler(&mut g, second_model, encoded.into(), SECOND_PASS_DENOISE);
         image = g.add("VAEDecode", [("samples", refined.out(0).into()), ("vae", vae.out(0).into())]);
     }
     g.add("ETN_SendImageWebSocket", [("images", image.out(0).into()), ("format", json!("PNG"))]);
@@ -234,7 +265,10 @@ mod tests {
             diffusion_models: vec!["anima_baseV10.safetensors".into()],
             text_encoders: vec!["qwen_3_06b_base.safetensors".into()],
             vaes: vec!["qwen_image_vae.safetensors".into()],
-            controls: vec!["anima-lllite-inpainting-v2.safetensors".into()],
+            controls: vec![
+                "anima-lllite-inpainting-v2.safetensors".into(),
+                "anima-lllite-any-test-like-v2.safetensors".into(),
+            ],
             ..ServerModels::default()
         }
     }
@@ -249,6 +283,7 @@ mod tests {
             count: 1,
             picture: Some(Picture::new(2, 2, vec![200; 16]).unwrap()),
             selection: None,
+            controls: Vec::new(),
             size: (2, 2),
             resolution: crate::Resolution::Quality,
             largest: None,
@@ -389,6 +424,126 @@ mod tests {
             g[&texts[1]]["inputs"]["text"],
             "worst quality, low quality, blurry, jpeg artifacts, watermark, signature, object, person, text"
         );
+    }
+
+    fn controlled(mut request: Request, kind: ControlKind, strength: f32) -> Request {
+        request.controls =
+            vec![crate::Control { kind, strength, picture: Picture::new(4, 4, [0u8, 0, 0, 255].repeat(16)).unwrap() }];
+        request
+    }
+
+    #[test]
+    fn control_layers_are_chained_on_the_model_before_sampling() {
+        let mut request = controlled(request(1.0), ControlKind::LineArt, 0.7);
+        request.controls.push(crate::Control {
+            kind: ControlKind::Scribble,
+            strength: 0.5,
+            picture: Picture::new(4, 4, [0u8, 0, 0, 255].repeat(16)).unwrap(),
+        });
+        let built = graph(&request, one_pass(64, 32), 42, &models()).unwrap();
+        let json = built.to_json();
+        let loads = built.nodes_of("ETN_control_load");
+        let applies = built.nodes_of("ETN_control_apply");
+        assert_eq!((loads.len(), applies.len()), (2, 2));
+        for load in &loads {
+            assert_eq!(json[load]["inputs"]["weights"], "anima-lllite-any-test-like-v2.safetensors");
+        }
+        assert_eq!(json[&applies[0]]["inputs"]["strength"], json!(0.7f32));
+        assert_eq!(json[&applies[0]]["inputs"]["end_percent"], LINE_ART_END);
+        assert_eq!(json[&applies[1]]["inputs"]["strength"], json!(0.5f32));
+        assert_eq!(json[&applies[1]]["inputs"]["end_percent"], SCRIBBLE_END);
+        for apply in &applies {
+            assert_eq!(json[apply]["inputs"]["start_percent"], 0.0);
+            assert!(json[apply]["inputs"].get("mask").is_none(), "a control image needs no mask");
+        }
+        // the sampler follows the last control's model
+        let samplers = built.nodes_of("KSampler");
+        assert_eq!(json[&samplers[0]]["inputs"]["model"], json!([&applies[1], 0]));
+        // each control was sent as a picture at the generation size
+        let images = built.nodes_of("ETN_LoadImageBase64");
+        assert_eq!(images.len(), 2);
+        for image in &images {
+            let png = procraft_engine::base64::decode(json[image]["inputs"]["image"].as_str().unwrap()).unwrap();
+            let sent = Picture::decode(&png).unwrap();
+            assert_eq!((sent.width, sent.height), (64, 32));
+        }
+    }
+
+    #[test]
+    fn a_refined_picture_follows_its_control_layers_too() {
+        let built =
+            graph(&controlled(request(0.5), ControlKind::LineArt, 0.7), one_pass(64, 32), 1, &models()).unwrap();
+        let json = built.to_json();
+        assert_eq!(built.nodes_of("ETN_control_apply").len(), 1);
+        let samplers = built.nodes_of("KSampler");
+        assert_eq!(json[&samplers[0]]["inputs"]["model"], json!([&built.nodes_of("ETN_control_apply")[0], 0]));
+        assert_eq!(json[&samplers[0]]["inputs"]["denoise"], 0.5);
+    }
+
+    #[test]
+    fn both_passes_of_a_picture_follow_their_control_layers() {
+        let built = graph(
+            &controlled(request(1.0), ControlKind::Scribble, 0.5),
+            two_pass((1024, 768), (2048, 1536)),
+            42,
+            &models(),
+        )
+        .unwrap();
+        let json = built.to_json();
+        assert_eq!(built.nodes_of("ETN_control_load").len(), 2, "one for each pass");
+        assert_eq!(built.nodes_of("ETN_control_apply").len(), 2);
+        let images = built.nodes_of("ETN_LoadImageBase64");
+        let sizes: Vec<(u32, u32)> = images
+            .iter()
+            .map(|image| {
+                let png = procraft_engine::base64::decode(json[image]["inputs"]["image"].as_str().unwrap()).unwrap();
+                let sent = Picture::decode(&png).unwrap();
+                (sent.width, sent.height)
+            })
+            .collect();
+        assert_eq!(sizes, vec![(1024, 768), (2048, 1536)]);
+        let samplers = built.nodes_of("KSampler");
+        let applies = built.nodes_of("ETN_control_apply");
+        assert_eq!(json[&samplers[0]]["inputs"]["model"], json!([&applies[0], 0]));
+        assert_eq!(json[&samplers[1]]["inputs"]["model"], json!([&applies[1], 0]));
+    }
+
+    #[test]
+    fn a_selection_chains_its_control_layers_with_the_inpaint_control() {
+        let built = graph(
+            &controlled(selection(SelectionMode::Fill), ControlKind::LineArt, 0.7),
+            one_pass(64, 64),
+            42,
+            &models(),
+        )
+        .unwrap();
+        let json = built.to_json();
+        let loads = built.nodes_of("ETN_control_load");
+        let applies = built.nodes_of("ETN_control_apply");
+        assert_eq!((loads.len(), applies.len()), (2, 2));
+        let (line_apply, inpaint_load, inpaint_apply) = loads
+            .iter()
+            .zip(&applies)
+            .find(|(load, _)| json[load]["inputs"]["weights"] == "anima-lllite-any-test-like-v2.safetensors")
+            .map(|(load, apply)| (apply.clone(), load.clone()))
+            .and_then(|(line_apply, line_load)| {
+                loads
+                    .iter()
+                    .zip(&applies)
+                    .find(|(load, _)| json[load]["inputs"]["weights"] == "anima-lllite-inpainting-v2.safetensors")
+                    .map(|(load, apply)| (line_apply, load.clone(), apply.clone()))
+                    .inspect(|_| {
+                        assert_eq!(json[&line_load]["inputs"]["model"], json!(["1", 0]), "on the checkpoint");
+                    })
+            })
+            .expect("both controls");
+        assert!(json[&line_apply]["inputs"].get("mask").is_none());
+        assert!(json[&inpaint_apply]["inputs"].get("mask").is_some());
+        // the inpaint control is loaded on top of the line control, then applied
+        assert_eq!(json[&inpaint_load]["inputs"]["model"], json!([&line_apply, 0]));
+        assert_eq!(json[&inpaint_apply]["inputs"]["model"], json!([&inpaint_load, 0]));
+        let samplers = built.nodes_of("KSampler");
+        assert_eq!(json[&samplers[0]]["inputs"]["model"], json!([&inpaint_apply, 0]));
     }
 
     #[test]
