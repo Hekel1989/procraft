@@ -1,5 +1,6 @@
 //! A request: everything one run needs, as plain data.
 
+use crate::plan::Resolution;
 use crate::{Picture, Style};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -16,8 +17,12 @@ pub struct Request {
     /// The picture there is (straight RGBA, sRGB), at [`size`](Self::size): what refining starts
     /// from.
     pub picture: Option<Picture>,
-    /// The area's size in canvas pixels: results come back this size.
+    /// The area's size in canvas pixels: results are scaled to this size at the end.
     pub size: (u32, u32),
+    /// How large to make the picture before scaling it to [`size`](Self::size).
+    pub resolution: Resolution,
+    /// The largest picture in megapixels; none: from the server's GPU memory.
+    pub largest: Option<f32>,
     /// NSFW is allowed: the style leaves its `safe` rating tag out.
     pub nsfw: bool,
 }

@@ -419,9 +419,9 @@ context box):
    then round each side to a multiple of 16, each side between 512 and 2048.
 3. **Back to the canvas**: results are scaled to `W × H` (Lanczos) and placed at the box's position.
 4. **Big areas** (box > 2 MP, e.g. a full 4K canvas): generated at 1 MP and scaled up, which softens
-   detail. *(This was M2's behaviour; replaced by B7a, to be built at the start of M3.)*
+   detail. *(This was M2's behaviour; replaced by B7a, built below.)*
 
-### B7a. Generation resolution (decided 2026-11-05, to build at the start of M3)
+### B7a. Generation resolution (decided 2026-11-05, built 2026-11-05)
 
 The area's **target size** is chosen in the popover; the model reaches it in one or two passes, as
 krita-ai-diffusion does (`backend/resolution.py`: canvas size × a multiplier, capped, and two
@@ -450,6 +450,8 @@ passes when the target is much bigger than the model's size).
   1216 × 864"), the note M2 left out.
 - Expected cost on a 24 GB GPU for 2800 × 2000 with the Anima style: Draft ≈ 9 s; Quality roughly
   25–40 s (to measure when built); Anima Turbo much less.
+- *Built:* a megapixel is 1,000,000 pixels. Quality refines above 1.5 × the model's pixels; Normal
+  refines whenever its half-area target is still above the model's own plan (so 1400 × 1000 does).
 
 ## B8. Previews on the canvas
 

@@ -11,6 +11,9 @@ use crate::plan::Plan;
 use crate::{Error, Family, Graph, Out, Request};
 
 pub(super) const NATIVE_PIXELS: u32 = 1024 * 1024;
+/// How much the second pass of a two-pass picture changes it: enough to add detail, too little to
+/// invent a new composition.
+pub(super) const SECOND_PASS_DENOISE: f64 = 0.4;
 
 /// Its checkpoints: anything with "anima" in the name in `diffusion_models`.
 pub(super) fn recognises(file: &str) -> bool {
@@ -39,7 +42,8 @@ pub(super) fn describe(kind: ModelKind) -> &'static str {
 }
 
 /// One picture: from an empty latent at full strength, or from the picture sent (scaled to the
-/// plan) below it.
+/// plan) below it. A two-pass plan composes at the first size, scales that up and samples it again
+/// at the second.
 pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerModels) -> Result<Graph, Error> {
     let family = Family::Anima;
     let file = |kind| family.pick(kind, models).ok_or_else(|| missing(kind));
@@ -52,38 +56,56 @@ pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerMod
         |g: &mut Graph, text: String| g.add("CLIPTextEncode", [("clip", clip.out(0).into()), ("text", json!(text))]);
     let positive = text(&mut g, style.positive(&request.prompt, request.nsfw));
     let negative = text(&mut g, style.negative.clone());
+    let sampler = |g: &mut Graph, latent: Out, denoise: f64| {
+        g.add(
+            "KSampler",
+            [
+                ("model", model.out(0).into()),
+                ("seed", json!(seed)),
+                ("steps", json!(style.steps)),
+                ("cfg", json!(style.cfg)),
+                ("sampler_name", json!(style.sampler)),
+                ("scheduler", json!(style.scheduler)),
+                ("positive", positive.out(0).into()),
+                ("negative", negative.out(0).into()),
+                ("latent_image", latent.into()),
+                ("denoise", json!(denoise)),
+            ],
+        )
+    };
 
     let refine = request.strength < 1.0;
     let latent: Out = if refine {
         let Some(picture) = &request.picture else {
             return Err(Error::Request { reason: "refining needs the picture there is".to_owned() });
         };
-        let png = picture.flattened([255, 255, 255]).resized(plan.width, plan.height)?.to_png()?;
+        let png = picture.flattened([255, 255, 255]).resized(plan.first.width, plan.first.height)?.to_png()?;
         let image = g.add("ETN_LoadImageBase64", [("image", json!(procraft_engine::base64::encode(&png)))]);
         g.add("VAEEncode", [("pixels", image.out(0).into()), ("vae", vae.out(0).into())]).into()
     } else {
         g.add(
             "EmptyLatentImage",
-            [("width", json!(plan.width)), ("height", json!(plan.height)), ("batch_size", json!(1))],
+            [("width", json!(plan.first.width)), ("height", json!(plan.first.height)), ("batch_size", json!(1))],
         )
         .into()
     };
-    let sampled = g.add(
-        "KSampler",
-        [
-            ("model", model.out(0).into()),
-            ("seed", json!(seed)),
-            ("steps", json!(style.steps)),
-            ("cfg", json!(style.cfg)),
-            ("sampler_name", json!(style.sampler)),
-            ("scheduler", json!(style.scheduler)),
-            ("positive", positive.out(0).into()),
-            ("negative", negative.out(0).into()),
-            ("latent_image", latent.into()),
-            ("denoise", json!(if refine { request.strength.clamp(0.01, 1.0) } else { 1.0 })),
-        ],
-    );
-    let image = g.add("VAEDecode", [("samples", sampled.out(0).into()), ("vae", vae.out(0).into())]);
+    let sampled = sampler(&mut g, latent, if refine { f64::from(request.strength.clamp(0.01, 1.0)) } else { 1.0 });
+    let mut image = g.add("VAEDecode", [("samples", sampled.out(0).into()), ("vae", vae.out(0).into())]);
+    if let Some(second) = plan.second.filter(|_| !refine) {
+        let scaled = g.add(
+            "ImageScale",
+            [
+                ("image", image.out(0).into()),
+                ("upscale_method", json!("lanczos")),
+                ("width", json!(second.width)),
+                ("height", json!(second.height)),
+                ("crop", json!("disabled")),
+            ],
+        );
+        let encoded = g.add("VAEEncode", [("pixels", scaled.out(0).into()), ("vae", vae.out(0).into())]);
+        let refined = sampler(&mut g, encoded.into(), SECOND_PASS_DENOISE);
+        image = g.add("VAEDecode", [("samples", refined.out(0).into()), ("vae", vae.out(0).into())]);
+    }
     g.add("ETN_SendImageWebSocket", [("images", image.out(0).into()), ("format", json!("PNG"))]);
     Ok(g)
 }
@@ -116,14 +138,26 @@ mod tests {
             count: 1,
             picture: Some(Picture::new(2, 2, vec![200; 16]).unwrap()),
             size: (2, 2),
+            resolution: crate::Resolution::Quality,
+            largest: None,
             nsfw: false,
         }
     }
 
+    fn one_pass(width: u32, height: u32) -> Plan {
+        let size = crate::Size::new(width, height);
+        Plan { first: size, second: None, size, target: size, capped: false }
+    }
+
+    fn two_pass(first: (u32, u32), second: (u32, u32)) -> Plan {
+        let first = crate::Size::new(first.0, first.1);
+        let second = crate::Size::new(second.0, second.1);
+        Plan { first, second: Some(second), size: second, target: second, capped: false }
+    }
+
     #[test]
     fn a_new_picture_starts_from_an_empty_latent() {
-        let plan = Plan { width: 1024, height: 768 };
-        let g = graph(&request(1.0), plan, 42, &models()).unwrap().to_json();
+        let g = graph(&request(1.0), one_pass(1024, 768), 42, &models()).unwrap().to_json();
         assert_eq!(g["1"]["inputs"]["unet_name"], "anima_baseV10.safetensors");
         assert_eq!(g["2"]["inputs"]["type"], "omnigen2");
         assert_eq!(g["4"]["inputs"]["text"], "masterpiece, best quality, safe, 1girl, night sky");
@@ -135,9 +169,35 @@ mod tests {
     }
 
     #[test]
-    fn refining_sends_the_picture_at_the_plans_size() {
-        let g = graph(&request(0.5), Plan { width: 64, height: 32 }, 1, &models()).unwrap();
+    fn a_two_pass_picture_scales_up_then_samples_again() {
+        let g = graph(&request(1.0), two_pass((1024, 768), (2048, 1536)), 42, &models()).unwrap();
         let json = g.to_json();
+        assert_eq!(g.nodes_of("KSampler").len(), 2);
+        assert_eq!(g.nodes_of("ImageScale").len(), 1);
+        let empty = &g.nodes_of("EmptyLatentImage")[0];
+        assert_eq!(
+            (json[empty]["inputs"]["width"].clone(), json[empty]["inputs"]["height"].clone()),
+            (json!(1024), json!(768))
+        );
+        let scale = &g.nodes_of("ImageScale")[0];
+        assert_eq!(json[scale]["inputs"]["upscale_method"], "lanczos");
+        assert_eq!(json[scale]["inputs"]["crop"], "disabled");
+        assert_eq!(
+            (json[scale]["inputs"]["width"].clone(), json[scale]["inputs"]["height"].clone()),
+            (json!(2048), json!(1536))
+        );
+        let samplers = g.nodes_of("KSampler");
+        assert_eq!(json[&samplers[0]]["inputs"]["denoise"], 1.0);
+        assert_eq!(json[&samplers[1]]["inputs"]["denoise"], SECOND_PASS_DENOISE);
+        assert_eq!(json[&samplers[1]]["inputs"]["seed"], 42);
+    }
+
+    #[test]
+    fn refining_sends_the_picture_at_the_plans_size() {
+        let g = graph(&request(0.5), one_pass(64, 32), 1, &models()).unwrap();
+        let json = g.to_json();
+        assert_eq!(g.nodes_of("KSampler").len(), 1, "refining is one pass");
+        assert_eq!(g.nodes_of("ImageScale").len(), 0);
         assert_eq!(g.nodes_of("ETN_LoadImageBase64").len(), 1);
         assert_eq!(json["8"]["inputs"]["denoise"], 0.5);
         let png = procraft_engine::base64::decode(json["6"]["inputs"]["image"].as_str().unwrap()).unwrap();
@@ -149,7 +209,7 @@ mod tests {
     fn a_missing_vae_is_named() {
         let mut m = models();
         m.vaes.clear();
-        let err = graph(&request(1.0), Plan { width: 64, height: 64 }, 1, &m).unwrap_err();
+        let err = graph(&request(1.0), one_pass(64, 64), 1, &m).unwrap_err();
         assert_eq!(err.to_string(), "the server is missing qwen_image_vae.safetensors in models/vae");
     }
 }

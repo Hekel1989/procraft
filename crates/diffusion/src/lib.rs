@@ -28,6 +28,7 @@ pub use error::Error;
 pub use family::Family;
 pub use graph::{Graph, Node, Out};
 pub use picture::Picture;
+pub use plan::{Plan, Resolution, Size, largest_for_vram, plan, plan_for};
 pub use request::Request;
 pub use requirements::{Feature, Missing, Readiness};
 pub use styles::{Style, styles_for};

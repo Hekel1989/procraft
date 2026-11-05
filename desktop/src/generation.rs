@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use egui::{Align2, Color32, Id, Order, Rect, Sense, TextureHandle, TextureOptions, Ui, UiBuilder, pos2, vec2};
 use procraft_core::{
-    CanvasSession, Generation, GenerationSettings, GenerationState, RunSettings, ServerConnection, ServerStatus,
-    ThumbnailImage,
+    CanvasSession, Generation, GenerationResolution, GenerationSettings, GenerationState, RunSettings,
+    ServerConnection, ServerStatus, SizeInfo, ThumbnailImage,
 };
 
 use crate::icons::{self, Icon, Part};
@@ -47,6 +47,10 @@ const BAD: u32 = 0xFFE84F51;
 const THUMB: f32 = 66.0;
 /// How often the run and the server are looked at while something is under way.
 const POLL: Duration = Duration::from_millis(100);
+/// The resolution choices, in the row's order.
+const RESOLUTIONS: [GenerationResolution; 3] =
+    [GenerationResolution::Draft, GenerationResolution::Normal, GenerationResolution::Quality];
+const RESOLUTION_NAMES: [&str; 3] = ["Draft", "Normal", "Quality"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum View {
@@ -74,6 +78,7 @@ pub struct GenerationUi {
     seed: Option<u64>,
     seed_text: String,
     count: u32,
+    resolution: GenerationResolution,
     address: String,
     state: GenerationState,
     server: ServerStatus,
@@ -84,12 +89,25 @@ pub struct GenerationUi {
 }
 
 impl GenerationUi {
-    /// With the server and NSFW as kept in the preferences.
+    /// With the server, NSFW, resolution and largest picture as kept in the preferences.
     pub fn from_prefs(prefs: &crate::prefs::Prefs) -> GenerationUi {
-        GenerationUi::new(GenerationSettings { address: prefs.generation_address.clone(), nsfw: prefs.generation_nsfw })
+        let resolution = match prefs.generation_resolution {
+            0 => GenerationResolution::Draft,
+            1 => GenerationResolution::Normal,
+            _ => GenerationResolution::Quality,
+        };
+        let largest = (prefs.generation_largest > 0.0).then_some(prefs.generation_largest);
+        GenerationUi::new(
+            GenerationSettings {
+                address: prefs.generation_address.clone(),
+                nsfw: prefs.generation_nsfw,
+                largest_megapixels: largest,
+            },
+            resolution,
+        )
     }
 
-    pub fn new(settings: GenerationSettings) -> GenerationUi {
+    pub fn new(settings: GenerationSettings, resolution: GenerationResolution) -> GenerationUi {
         let generation = Generation::new(settings.clone());
         let server = generation.server();
         GenerationUi {
@@ -104,6 +122,7 @@ impl GenerationUi {
             seed: None,
             seed_text: String::new(),
             count: 1,
+            resolution,
             state: GenerationState::default(),
             server,
             thumbnails: HashMap::new(),
@@ -182,12 +201,12 @@ impl GenerationUi {
 
     fn form_height(&self) -> f32 {
         let error = if self.state.error.is_some() { 40.0 } else { 0.0 };
-        56.0 + 22.0 + 84.0 + 22.0 + 90.0 + 54.0 + 52.0 + 60.0 + error + PAD
+        56.0 + 22.0 + 84.0 + 22.0 + 90.0 + 54.0 + 52.0 + 22.0 + 46.0 + 24.0 + 60.0 + error + PAD
     }
 
     fn server_height(&self) -> f32 {
         let missing: usize = self.server.features.iter().map(|f| f.missing.len().max(1)).sum();
-        56.0 + 100.0 + 44.0 * 3.0 + 22.0 * missing as f32 + 30.0 + 52.0 + 70.0 + PAD
+        56.0 + 100.0 + 44.0 * 3.0 + 22.0 * missing as f32 + 30.0 + 56.0 + 52.0 + 70.0 + PAD
     }
 
     /// The title and, on its right, the connection: a dot and the server; tapped, the server view.
@@ -381,6 +400,35 @@ impl GenerationUi {
             }
         }
         y += 52.0;
+        // resolution: three choices, then what the chosen one makes of this area
+        label(ui, pos2(left + 2.0, y), "RESOLUTION");
+        y += 22.0;
+        let seg = Rect::from_min_max(pos2(left, y), pos2(right, y + 40.0));
+        ui.painter().rect_filled(seg, 12.0, argb(ROW));
+        let cell_w = (seg.width() - 6.0) / 3.0;
+        for (i, (&resolution, name)) in RESOLUTIONS.iter().zip(RESOLUTION_NAMES).enumerate() {
+            let cell = Rect::from_min_max(
+                pos2(seg.left() + 3.0 + i as f32 * cell_w, seg.top() + 3.0),
+                pos2(seg.left() + 3.0 + (i + 1) as f32 * cell_w - 2.0, seg.bottom() - 3.0),
+            );
+            let on = self.resolution == resolution;
+            if on {
+                ui.painter().rect_filled(cell, 9.0, argb(pc::ACCENT));
+            }
+            let ink = if on { Color32::WHITE } else { argb(DIM) };
+            text(ui.painter(), cell.center(), Align2::CENTER_CENTER, name, 14.0, Weight::Medium, ink);
+            if ui.interact(cell, ui.scope_id().with(("resolution", i)), Sense::click()).clicked()
+                && self.resolution != resolution
+            {
+                self.resolution = resolution;
+                self.settings_changed = true;
+            }
+        }
+        y += 46.0;
+        let info = self.generation.size_for(session, self.resolution);
+        let detail = plan_text(&info, self.largest());
+        text(ui.painter(), pos2(left + 2.0, y), Align2::LEFT_TOP, &detail, 12.0, Weight::Regular, argb(DIM));
+        y += 24.0;
         // Generate, or Cancel while a run goes
         let go = Rect::from_min_max(pos2(left, y), pos2(right, y + 48.0));
         let running = self.state.running.as_ref();
@@ -423,11 +471,34 @@ impl GenerationUi {
             strength: self.strength,
             seed: seed.or(self.seed),
             count: self.count,
+            resolution: Some(self.resolution),
         };
         match self.generation.generate(session, run.clone()) {
             Ok(_) => self.last = Some(run),
             Err(e) => self.state.error = Some(e.to_string()),
         }
+    }
+
+    /// The resolution choice as the preferences keep it: Draft 0, Normal 1, Quality 2.
+    pub fn resolution_index(&self) -> usize {
+        RESOLUTIONS.iter().position(|r| *r == self.resolution).unwrap_or(2)
+    }
+
+    /// The largest picture as the preferences keep it; 0 when it's the GPU's suggestion.
+    pub fn largest_for_prefs(&self) -> f32 {
+        self.settings.largest_megapixels.unwrap_or(0.0)
+    }
+
+    /// The largest picture in force: the setting, else the GPU's suggestion.
+    fn largest(&self) -> f32 {
+        self.settings.largest_megapixels.unwrap_or(self.server.largest_megapixels).clamp(1.0, 16.0)
+    }
+
+    /// Uses `largest` from now on (none: the GPU's suggestion) and keeps it.
+    fn set_largest(&mut self, largest: Option<f32>) {
+        self.settings.largest_megapixels = largest.map(|mp| mp.clamp(1.0, 16.0));
+        self.generation.set_settings(self.settings.clone());
+        self.settings_changed = true;
     }
 
     fn not_set_up(&mut self, ui: &mut Ui, look: &mut Look, body: Rect) {
@@ -543,6 +614,39 @@ impl GenerationUi {
             }
         }
         y += height + 12.0;
+        // the largest picture: the GPU's suggestion until it's changed, then 1–16 MP by halves
+        let row = Rect::from_min_max(pos2(left, y), pos2(right, y + 44.0));
+        ui.painter().rect_filled(row, 14.0, argb(ROW));
+        text(
+            ui.painter(),
+            pos2(left + 16.0, row.center().y),
+            Align2::LEFT_CENTER,
+            "Largest picture",
+            15.0,
+            Weight::Regular,
+            argb(INK),
+        );
+        let current = self.largest();
+        let value = Rect::from_center_size(pos2(right - 92.0, row.center().y), vec2(104.0, 32.0));
+        let minus = Rect::from_center_size(pos2(value.left() - 18.0, row.center().y), vec2(28.0, 28.0));
+        let plus = Rect::from_center_size(pos2(right - 18.0, row.center().y), vec2(28.0, 28.0));
+        text(ui.painter(), minus.center(), Align2::CENTER_CENTER, "−", 20.0, Weight::Regular, argb(DIM));
+        text(ui.painter(), plus.center(), Align2::CENTER_CENTER, "+", 20.0, Weight::Regular, argb(DIM));
+        let words = match self.settings.largest_megapixels {
+            Some(_) => format!("{} MP", megapixels(current)),
+            None => format!("Auto · {} MP", megapixels(current)),
+        };
+        text(ui.painter(), value.center(), Align2::CENTER_CENTER, &words, 14.0, Weight::Regular, argb(INK));
+        if ui.interact(minus, ui.scope_id().with("largest less"), Sense::click()).clicked() {
+            self.set_largest(Some((current - 0.5).max(1.0)));
+        }
+        if ui.interact(plus, ui.scope_id().with("largest more"), Sense::click()).clicked() {
+            self.set_largest(Some((current + 0.5).min(16.0)));
+        }
+        if ui.interact(value, ui.scope_id().with("largest auto"), Sense::click()).clicked() {
+            self.set_largest(None);
+        }
+        y += 56.0;
         // NSFW
         let row = Rect::from_min_max(pos2(left, y), pos2(right, y + 44.0));
         ui.painter().rect_filled(row, 14.0, argb(ROW));
@@ -688,6 +792,21 @@ impl GenerationUi {
                     self.generation.cancel();
                 }
             }
+            // what the shown picture was made at, when the area is much larger
+            if let Some(r) = self.state.shown.and_then(|id| self.state.results.iter().find(|r| r.id == id))
+                && r.scaled_from_width > 0
+            {
+                let words = format!("scaled up from {} × {}", r.scaled_from_width, r.scaled_from_height);
+                text(
+                    ui.painter(),
+                    pos2(x + 4.0, cy - 12.0),
+                    Align2::LEFT_CENTER,
+                    &words,
+                    12.0,
+                    Weight::Regular,
+                    argb(DIM),
+                );
+            }
             // the buttons from the right: ✕, Apply, Again, the seed
             let mut bx = rect.right() - 16.0;
             let close = Rect::from_min_max(pos2(bx - 30.0, cy - 15.0), pos2(bx, cy + 15.0));
@@ -795,6 +914,27 @@ fn texture(ctx: &egui::Context, name: &str, image: &ThumbnailImage) -> TextureHa
     let size = [image.width as usize, image.height as usize];
     let picture = egui::ColorImage::from_rgba_premultiplied(size, &image.rgba);
     ctx.load_texture(name, picture, TextureOptions::LINEAR)
+}
+
+/// The small text under the resolution row: what will be made, and how.
+fn plan_text(size: &SizeInfo, largest: f32) -> String {
+    let mut words = format!("{} × {}", size.width, size.height);
+    if size.passes > 1 {
+        words.push_str(&format!(" · {} passes", size.passes));
+    } else if size.scaled_up {
+        words.push_str(" → scaled up");
+    } else {
+        words.push_str(" · 1 pass");
+    }
+    if size.capped {
+        words.push_str(&format!(" · capped at {} MP", megapixels(largest)));
+    }
+    words
+}
+
+/// `mp` without a needless `.0`.
+fn megapixels(mp: f32) -> String {
+    if (mp - mp.round()).abs() < 0.01 { format!("{mp:.0}") } else { format!("{mp:.1}") }
 }
 
 /// `text` cut to `most` characters.

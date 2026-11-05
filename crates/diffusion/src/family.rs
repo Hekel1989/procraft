@@ -100,6 +100,13 @@ impl Family {
         }
     }
 
+    /// The denoise a second pass uses, for weighting its progress.
+    pub(crate) fn second_pass_denoise(self) -> f64 {
+        match self {
+            Family::Anima => anima::SECOND_PASS_DENOISE,
+        }
+    }
+
     /// The graph that makes one picture for `request`, at `plan`'s size, with seed `seed`.
     pub fn graph(self, request: &Request, plan: Plan, seed: u64, models: &ServerModels) -> Result<Graph, Error> {
         match self {

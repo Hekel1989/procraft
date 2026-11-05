@@ -3,7 +3,8 @@
 //! ```text
 //! diffusion-cli [--server ADDRESS] check
 //! diffusion-cli [--server ADDRESS] generate PROMPT [--style ID] [--size WxH] [--count N]
-//!     [--seed N] [--strength S --input FILE] [--nsfw] [-o FILE]
+//!     [--seed N] [--strength S --input FILE] [--resolution draft|normal|quality]
+//!     [--largest MP] [--nsfw] [-o FILE]
 //! ```
 //!
 //! The server is `--server`, else `PROCRAFT_COMFY_URL`, else `127.0.0.1:8189`.
@@ -12,11 +13,15 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use procraft_diffusion::{Address, Connection, Family, Feature, Picture, Request, ServerState, Worker};
+use procraft_diffusion::{
+    Address, Connection, Family, Feature, Picture, Plan, Request, Resolution, ServerState, Worker, largest_for_vram,
+    plan_for,
+};
 
 const USAGE: &str = "usage: diffusion-cli [--server ADDRESS] check
        diffusion-cli [--server ADDRESS] generate PROMPT [--style ID] [--size WxH] [--count N]
-           [--seed N] [--strength S --input FILE] [--nsfw] [-o FILE]";
+           [--seed N] [--strength S --input FILE] [--resolution draft|normal|quality]
+           [--largest MP] [--nsfw] [-o FILE]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -36,6 +41,15 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 
 fn number<T: std::str::FromStr>(args: &[String], name: &str, default: T) -> Result<T, String> {
     flag(args, name).map_or(Ok(default), |v| v.parse().map_err(|_| format!("{name}: not a number: {v}")))
+}
+
+fn resolution(args: &[String]) -> Result<Resolution, String> {
+    match flag(args, "--resolution").unwrap_or("quality").to_ascii_lowercase().as_str() {
+        "draft" => Ok(Resolution::Draft),
+        "normal" => Ok(Resolution::Normal),
+        "quality" => Ok(Resolution::Quality),
+        other => Err(format!("--resolution: draft, normal or quality, not {other}")),
+    }
 }
 
 fn cli(args: &[String]) -> Result<(), String> {
@@ -130,6 +144,9 @@ fn generate(worker: &Worker, server: &ServerState, prompt: &str, args: &[String]
         (None, None) => (1024, 1024),
     };
     let random = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64 % 1_000_000_000).unwrap_or(0);
+    let resolution = resolution(args)?;
+    let largest: Option<f32> =
+        flag(args, "--largest").map(|v| v.parse().map_err(|_| format!("--largest: not a number: {v}"))).transpose()?;
     let request = Request {
         prompt: prompt.to_owned(),
         style,
@@ -138,11 +155,18 @@ fn generate(worker: &Worker, server: &ServerState, prompt: &str, args: &[String]
         count: number(args, "--count", 1)?,
         picture: picture.map(|p| p.resized(size.0, size.1)).transpose().map_err(|e| e.to_string())?,
         size,
+        resolution,
+        largest,
         nsfw: args.iter().any(|a| a == "--nsfw"),
     };
     if request.style.family != Family::Anima {
         return Err("only Anima so far".to_owned());
     }
+    let vram = server.stats.as_ref().and_then(|s| s.gpu.as_ref()).map_or(0, |(_, bytes)| *bytes);
+    let largest = request.largest.unwrap_or_else(|| largest_for_vram(vram));
+    let plan =
+        plan_for(size.0, size.1, request.style.family.native_pixels(), request.resolution, largest, !request.is_new());
+    print_plan(&plan);
     let out = PathBuf::from(flag(args, "-o").unwrap_or("generated.png"));
     let started = Instant::now();
     let id = worker.submit(request.clone());
@@ -173,6 +197,26 @@ fn generate(worker: &Worker, server: &ServerState, prompt: &str, args: &[String]
         eprint!("\r{:>3.0}%", run.progress * 100.0);
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// The sizes and passes of a plan, before it runs.
+fn print_plan(plan: &Plan) {
+    let passes = plan.passes();
+    let mut words = format!(
+        "{} × {} target, {passes} pass{}: {} × {}",
+        plan.target.width,
+        plan.target.height,
+        if passes == 1 { "" } else { "es" },
+        plan.first.width,
+        plan.first.height
+    );
+    if let Some(second) = plan.second {
+        words.push_str(&format!(", then {} × {}", second.width, second.height));
+    }
+    if plan.capped {
+        words.push_str(" (capped)");
+    }
+    println!("plan: {words}");
 }
 
 /// `out` as it is for one picture; `out-1.png`, `out-2.png`… for several.

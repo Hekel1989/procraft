@@ -15,7 +15,7 @@ use parking_lot::{Condvar, Mutex};
 use serde_json::json;
 
 use crate::comfy::{Comfy, Event, Socket, SystemStats};
-use crate::plan::plan;
+use crate::plan::{largest_for_vram, plan_for};
 use crate::requirements::{Feature, Readiness, all_nodes};
 use crate::{Address, Error, Family, Graph, Picture, Request, ServerModels, Style, styles_for};
 
@@ -60,11 +60,14 @@ impl ServerState {
     }
 }
 
-/// A picture a run made, at the request's size.
+/// A picture a run made, at the request's area and the size it was made at before the final
+/// scale there.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunResult {
     pub seed: u64,
     pub picture: Picture,
+    /// The plan's final pass size.
+    pub generated: (u32, u32),
 }
 
 /// How a run is going.
@@ -360,7 +363,10 @@ fn run(
         return Err(Error::Missing(missing));
     }
     let (width, height) = request.size;
-    let plan = plan(width, height, family.native_pixels());
+    let vram = on.shared.inner.lock().server.stats.as_ref().and_then(|s| s.gpu.as_ref()).map_or(0, |(_, bytes)| *bytes);
+    let largest = request.largest.unwrap_or_else(|| largest_for_vram(vram));
+    let plan = plan_for(width, height, family.native_pixels(), request.resolution, largest, !request.is_new());
+    let weights = pass_weights(&plan, request.style.steps, family);
     let count = request.count.max(1);
     for i in 0..count {
         if on.shared.inner.lock().cancelled.contains(&on.id) {
@@ -369,7 +375,7 @@ fn run(
         let seed = request.seed.wrapping_add(u64::from(i));
         let graph = family.graph(request, plan, seed, models)?;
         let part = |done: f64| (f64::from(i) + done) / f64::from(count);
-        let bytes = match follow(on, socket, &graph, part)? {
+        let bytes = match follow(on, socket, &graph, part, &weights)? {
             Some(bytes) => bytes,
             // an identical graph ran before: the picture it made, else the same graph sending
             // as JPEG (only the sending node runs again)
@@ -380,7 +386,7 @@ fn run(
                     for node in again.nodes_of("ETN_SendImageWebSocket") {
                         again.set(&node, "format", json!("JPEG"));
                     }
-                    follow(on, socket, &again, part)?
+                    follow(on, socket, &again, part, &weights)?
                         .ok_or_else(|| Error::protocol("the server finished without sending a picture"))?
                 }
             },
@@ -388,7 +394,8 @@ fn run(
         recent.remember(&graph, &bytes);
         let picture = Picture::decode(&bytes)?.resized(width, height)?;
         if let Some(run) = on.shared.inner.lock().runs.get_mut(&on.id) {
-            run.results.push(crate::RunResult { seed, picture });
+            let generated = (plan.size.width, plan.size.height);
+            run.results.push(crate::RunResult { seed, picture, generated });
             run.progress = part(1.0) as f32;
             run.preview = None;
         }
@@ -396,21 +403,36 @@ fn run(
     Ok(())
 }
 
+/// How much of a graph's progress each sampler covers. ComfyUI runs a denoised sampler for
+/// `steps × denoise` steps, rounded up.
+fn pass_weights(plan: &crate::Plan, steps: u32, family: Family) -> Vec<f64> {
+    if plan.second.is_none() {
+        return vec![1.0];
+    }
+    let first = f64::from(steps.max(1));
+    let second = (first * family.second_pass_denoise()).ceil().max(1.0);
+    vec![first / (first + second), second / (first + second)]
+}
+
 /// Queues `graph` and follows it to its end: the picture its sending node sent (PNG or JPEG
-/// file), none if it sent none. `part` turns how far the graph is into how far the run is.
+/// file), none if it sent none. `part` turns how far the graph is into how far the run is, and
+/// `weights` how much each of its samplers is worth.
 fn follow(
     on: &Running<'_>,
     socket: &mut Option<Socket>,
     graph: &Graph,
     part: impl Fn(f64) -> f64,
+    weights: &[f64],
 ) -> Result<Option<Vec<u8>>, Error> {
     if socket.is_none() {
         *socket = Some(Socket::connect(on.api.address(), on.client_id)?);
     }
     let Some(ws) = socket.as_mut() else { return Ok(None) };
     let sender = graph.nodes_of("ETN_SendImageWebSocket");
+    let samplers = graph.nodes_of("KSampler");
     let prompt_id = on.api.queue(graph, on.client_id)?;
     let mut running: Option<String> = None;
+    let mut pass = 0usize;
     let mut made = None;
     loop {
         if on.shared.inner.lock().cancelled.contains(&on.id) {
@@ -423,12 +445,20 @@ fn follow(
         let Some(event) = ws.next_event()? else { continue };
         match event {
             Event::Executing { prompt_id: p, node } if p == prompt_id => match node {
-                Some(node) => running = Some(node),
+                Some(node) => {
+                    if let Some(at) = samplers.iter().position(|s| *s == node) {
+                        pass = at;
+                    }
+                    running = Some(node);
+                }
                 None => return Ok(made),
             },
             Event::Progress { prompt_id: p, value, max } if p == prompt_id && max > 0 => {
+                let before: f64 = weights.iter().take(pass).sum();
+                let share = weights.get(pass).copied().unwrap_or(0.0);
+                let done = (before + share * f64::from(value) / f64::from(max)).clamp(0.0, 1.0);
                 if let Some(run) = on.shared.inner.lock().runs.get_mut(&on.id) {
-                    run.progress = part(f64::from(value) / f64::from(max)) as f32;
+                    run.progress = part(done) as f32;
                 }
             }
             // what the sending node sends is the picture; anything else, a sampling preview
