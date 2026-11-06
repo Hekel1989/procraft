@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Style editor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root { --page: #121212; --text: #e8e8e8; --dim: #9a9a9a; --card: #1e1e1e; --ok: #3ccf6e; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) { --page: #f4f4f4; --text: #1d1d1d; --dim: #666; --card: #fff; }
+}
+:root[data-theme="light"] { --page: #f4f4f4; --text: #1d1d1d; --dim: #666; --card: #fff; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text); font-family: Inter, system-ui, sans-serif; }
+main { max-width: 1180px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 28px; margin: 0 0 6px; }
+.lede { color: var(--dim); margin: 0 0 28px; max-width: 780px; line-height: 1.5; }
+section { margin: 0 0 44px; }
+section > h2 { font-size: 18px; margin: 0 0 4px; }
+section > p { color: var(--dim); margin: 0 0 12px; font-size: 14px; line-height: 1.5; max-width: 820px; }
+.frame { width: 100%; height: auto; display: block; border-radius: 14px; box-shadow: 0 6px 30px rgba(0,0,0,.35); background: #1c1c1c; }
+.cmp { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.cmp > div { background: var(--card); border-radius: 14px; padding: 16px 18px; font-size: 14px; line-height: 1.55; }
+.cmp h4 { margin: 0 0 6px; font-size: 15px; }
+.cmp ul { margin: 6px 0 0; padding-left: 18px; }
+.list { background: var(--card); border-radius: 14px; padding: 16px 22px; font-size: 14px; line-height: 1.6; }
+@media (max-width: 700px) { .cmp { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1b1f5e"/><stop offset=".45" stop-color="#6b2f8a"/><stop offset=".72" stop-color="#e2668a"/><stop offset=".9" stop-color="#f6b261"/></linearGradient>
+<linearGradient id="r1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0f163f"/><stop offset=".5" stop-color="#4b2a7a"/><stop offset=".8" stop-color="#d9726e"/><stop offset="1" stop-color="#f4c47f"/></linearGradient>
+<linearGradient id="r2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0b2a3a"/><stop offset=".55" stop-color="#1f6f7a"/><stop offset="1" stop-color="#9fd6c2"/></linearGradient>
+<linearGradient id="r3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3a160e"/><stop offset=".5" stop-color="#b2472a"/><stop offset="1" stop-color="#f6c26b"/></linearGradient>
+<linearGradient id="r4" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#14213d"/><stop offset=".6" stop-color="#3d5a80"/><stop offset="1" stop-color="#e0c3a3"/></linearGradient>
+<g id="art-original">
+  <rect width="1120" height="800" fill="url(#sky)"/>
+  <circle cx="800" cy="420" r="62" fill="#fff1d2"/><circle cx="800" cy="420" r="120" fill="#ffd9a0" opacity=".18"/>
+  <path d="M0 520 C220 440 400 500 600 460 S940 420 1120 470 V800 H0z" fill="#7c3c92"/>
+  <path d="M0 620 C240 560 520 620 760 590 S1000 560 1120 590 V800 H0z" fill="#3f1f5c"/>
+</g>
+<g id="art-r1">
+  <rect width="1120" height="800" fill="url(#r1)"/><circle cx="820" cy="250" r="70" fill="#fff4d6" opacity=".95"/>
+  <path d="M0 560 C200 470 380 520 560 480 S900 440 1120 500 V800 H0z" fill="#3a1f5a"/>
+  <path d="M0 640 C260 580 520 640 760 600 S1000 560 1120 600 V800 H0z" fill="#1d0f33"/>
+  <path d="M520 600 l14 -60 14 60z M560 610 l18 -80 18 80z" fill="#0d0820"/>
+  <rect x="610" y="640" width="26" height="110" fill="#e9e0d0"/><rect x="606" y="626" width="34" height="18" fill="#c0392b"/>
+  <path d="M0 740 C300 700 700 760 1120 720 V800 H0z" fill="#120a24"/>
+</g>
+<g id="art-r2">
+  <rect width="1120" height="800" fill="url(#r2)"/><circle cx="300" cy="230" r="58" fill="#f2fbf6" opacity=".9"/>
+  <path d="M0 520 C260 430 520 520 760 470 S1000 430 1120 480 V800 H0z" fill="#16444f"/>
+  <path d="M0 650 C300 590 620 660 1120 610 V800 H0z" fill="#0a2630"/>
+</g>
+<g id="art-r3">
+  <rect width="1120" height="800" fill="url(#r3)"/><circle cx="560" cy="330" r="90" fill="#ffe3a3"/>
+  <path d="M0 560 C240 500 480 560 720 520 S1000 500 1120 540 V800 H0z" fill="#6a1f12"/>
+  <path d="M0 680 C320 630 700 690 1120 650 V800 H0z" fill="#2a0c07"/>
+</g>
+<g id="art-r4">
+  <rect width="1120" height="800" fill="url(#r4)"/><circle cx="880" cy="200" r="48" fill="#fff" opacity=".85"/>
+  <path d="M0 540 C260 480 560 540 820 500 S1040 480 1120 500 V800 H0z" fill="#293e5c"/>
+  <path d="M0 660 C340 610 680 670 1120 630 V800 H0z" fill="#101c2e"/>
+</g>
+</defs></svg>
+<main>
+<h1>Editing styles: a page in the popover, or a studio?</h1>
+<p class="lede"><b>Decided 2026-11-06: B, the Style Studio.</b> Someone working on a style doesn't need the canvas, and krita-ai-diffusion edits styles in a window of its own. A stays here for the record.</p>
+<p class="lede">Sketches only, nothing built. The test tablet's screen at 1120 × 800 dp. The same style, "Moonlit" (Anima with two LoRAs), edited both ways. Agreed already: built-in styles are read-only (Duplicate makes yours), plain words first with the numbers under Advanced, styles are app-wide.</p>
+
+<section>
+  <h2>Getting there: hold a style card</h2>
+  <p>In the Generate popover, holding a style card opens a small menu, as holding a brush does. Your own styles: Edit, Duplicate, Delete. Built-in ones: Duplicate only.</p>
+  <svg class="frame" viewBox="0 0 1120 800" role="img" font-family="Inter, system-ui, sans-serif"><use href="#art-original"/><rect x="0" y="0" width="1120" height="44" fill="#1c1c1c" fill-opacity=".92"/>
+<text x="40" y="28" font-size="17" fill="#aaa">Gallery</text>
+<circle cx="120" cy="22" r="15" fill="#141414"/>
+<rect x="114" y="16" width="12" height="12" rx="3" fill="#c7c7c7" opacity=".85"/>
+<circle cx="170" cy="22" r="15" fill="#141414"/>
+<rect x="164" y="16" width="12" height="12" rx="3" fill="#c7c7c7" opacity=".85"/>
+<circle cx="220" cy="22" r="15" fill="#141414"/>
+<rect x="214" y="16" width="12" height="12" rx="3" fill="#c7c7c7" opacity=".85"/>
+<circle cx="270" cy="22" r="15" fill="#141414"/>
+<rect x="264" y="16" width="12" height="12" rx="3" fill="#c7c7c7" opacity=".85"/>
+<circle cx="320" cy="22" r="15" fill="#0076FD"/>
+<text x="320" y="27" font-size="12" font-weight="700" text-anchor="middle" fill="#fff">AI</text>
+<rect x="870" y="12" width="20" height="20" rx="5" fill="#0076FD" opacity="1"/>
+<rect x="920" y="12" width="20" height="20" rx="5" fill="#d6d6d6" opacity="0.8"/>
+<rect x="970" y="12" width="20" height="20" rx="5" fill="#d6d6d6" opacity="0.8"/>
+<rect x="1020" y="12" width="20" height="20" rx="5" fill="#d6d6d6" opacity="0.8"/>
+<circle cx="1072" cy="22" r="15" fill="#f4f0e6"/>
+<rect x="0" y="140" width="44" height="460" rx="14" fill="#141414" fill-opacity=".85"/>
+<rect x="6" y="146" width="32" height="150" rx="8" fill="#3a3a3a"/><rect x="9" y="236" width="26" height="14" rx="7" fill="#c8c8c8"/>
+<rect x="12" y="316" width="20" height="20" rx="5" fill="none" stroke="#9a9a9a" stroke-width="2"/>
+<rect x="6" y="360" width="32" height="150" rx="8" fill="#3a3a3a"/><rect x="9" y="368" width="26" height="14" rx="7" fill="#c8c8c8"/><rect x="60" y="56" width="400" height="300" rx="22" fill="#1e1e1e" fill-opacity=".94" stroke="#fff" stroke-opacity=".08"/><path d="M310 57 L320 46 L330 57z" fill="#1e1e1e" fill-opacity=".94"/><text x="76" y="96" font-size="24" font-weight="700" fill="#c7c7c7" text-anchor="start">Generate</text><text letter-spacing="1" x="78" y="132" font-size="12" font-weight="500" fill="#9a9a9a" text-anchor="start">STYLE</text><rect x="76" y="142" width="116" height="76" rx="12" fill="#5b5b5b" fill-opacity=".18" stroke="none" stroke-width="2"/><text x="86" y="168" font-size="14.5" font-weight="500" fill="#fff" text-anchor="start">Anima</text><text x="86" y="206" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">30 steps · CFG 4</text><rect x="200" y="142" width="116" height="76" rx="12" fill="#5b5b5b" fill-opacity=".18" stroke="none" stroke-width="2"/><text x="210" y="168" font-size="14.5" font-weight="500" fill="#fff" text-anchor="start">Anima Turbo</text><text x="210" y="206" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">8 steps · CFG 1</text><rect x="324" y="142" width="116" height="76" rx="12" fill="#5b5b5b" fill-opacity=".18" stroke="#0076FD" stroke-width="2"/><text x="334" y="168" font-size="14.5" font-weight="500" fill="#fff" text-anchor="start">Moonlit</text><text x="334" y="206" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">LoRA · 24 steps</text><rect x="321" y="139" width="122" height="82" rx="14" fill="none" stroke="#ffe36e" stroke-width="2.5" stroke-dasharray="5 4"/><rect x="326" y="236" width="200" height="146" rx="14" fill="#313135" fill-opacity=".98" stroke="#fff" stroke-opacity=".1"/><text x="342" y="272" font-size="15" font-weight="400" fill="#fff" text-anchor="start">Edit</text><rect x="326" y="287" width="200" height="1" fill="#fff" fill-opacity=".1"/><text x="342" y="316" font-size="15" font-weight="400" fill="#fff" text-anchor="start">Duplicate</text><rect x="326" y="331" width="200" height="1" fill="#fff" fill-opacity=".1"/><text x="342" y="360" font-size="15" font-weight="400" fill="#ff6b6b" text-anchor="start">Delete</text><rect x="500" y="236" width="200" height="58" rx="14" fill="#313135" fill-opacity=".98" stroke="#fff" stroke-opacity=".1"/><text x="516" y="272" font-size="15" font-weight="400" fill="#fff" text-anchor="start">Duplicate</text><rect x="500" y="160" width="330" height="48" rx="8" fill="#ffe36e"/>
+<text x="510" y="181" font-size="13" fill="#222">Holding a built-in style (Anima, Anima Turbo)</text>
+<text x="510" y="198" font-size="13" fill="#222">offers only Duplicate: the copy is yours</text><rect x="86" y="470" width="330" height="31" rx="8" fill="#ffe36e"/>
+<text x="96" y="491" font-size="13" fill="#222">Holding one of yours: Edit, Duplicate, Delete</text>
+<path d="M251.0 470 L406 300" stroke="#ffe36e" stroke-width="2.5" stroke-dasharray="6 5"/><circle cx="406" cy="300" r="5" fill="#ffe36e"/></svg>
+</section>
+
+<section>
+  <h2>A · A page inside the popover: the top</h2>
+  <p>Edit swaps the form for the style's page, as the server button swaps it for the server view. ‹ goes back. Everything is one scrolling column.</p>
+  <svg class="frame" viewBox="0 0 1120 800" role="img" font-family="Inter, system-ui, sans-serif"><use href="#art-original"/><rect x="0" y="0" width="1120" height="44" fill="#1c1c1c" fill-opacity=".92"/>
+<text x="40" y="28" font-size="17" fill="#aaa">Gallery</text>
+<circle cx="120" cy="22" r="15" fill="#141414"/>
+<rect x="114" y="16" width="12" height="12" rx="3" fill="#c7c7c7" opacity=".85"/>
+<circle cx="170" cy="22" r="15" fill="#141414"/>
+<rect x="164" y="16" width="12" height="12" rx="3" fill="#c7c7c7" opacity=".85"/>
+<circle cx="220" cy="22" r="15" fill="#141414"/>
+<rect x="214" y="16" width="12" height="12" rx="3" fill="#c7c7c7" opacity=".85"/>
+<circle cx="270" cy="22" r="15" fill="#141414"/>
+<rect x="264" y="16" width="12" height="12" rx="3" fill="#c7c7c7" opacity=".85"/>
+<circle cx="320" cy="22" r="15" fill="#0076FD"/>
+<text x="320" y="27" font-size="12" font-weight="700" text-anchor="middle" fill="#fff">AI</text>
+<rect x="870" y="12" width="20" height="20" rx="5" fill="#0076FD" opacity="1"/>
+<rect x="920" y="12" width="20" height="20" rx="5" fill="#d6d6d6" opacity="0.8"/>
+<rect x="970" y="12" width="20" height="20" rx="5" fill="#d6d6d6" opacity="0.8"/>
+<rect x="1020" y="12" width="20" height="20" rx="5" fill="#d6d6d6" opacity="0.8"/>
+<circle cx="1072" cy="22" r="15" fill="#f4f0e6"/>
+<rect x="0" y="140" width="44" height="460" rx="14" fill="#141414" fill-opacity=".85"/>
+<rect x="6" y="146" width="32" height="150" rx="8" fill="#3a3a3a"/><rect x="9" y="236" width="26" height="14" rx="7" fill="#c8c8c8"/>
+<rect x="12" y="316" width="20" height="20" rx="5" fill="none" stroke="#9a9a9a" stroke-width="2"/>
+<rect x="6" y="360" width="32" height="150" rx="8" fill="#3a3a3a"/><rect x="9" y="368" width="26" height="14" rx="7" fill="#c8c8c8"/><rect x="60" y="56" width="400" height="730" rx="22" fill="#1e1e1e" fill-opacity=".94" stroke="#fff" stroke-opacity=".08"/><path d="M310 57 L320 46 L330 57z" fill="#1e1e1e" fill-opacity=".94"/><text x="76" y="96" font-size="26" font-weight="400" fill="#0076FD" text-anchor="start">‹</text><text x="100" y="96" font-size="22" font-weight="700" fill="#c7c7c7" text-anchor="start">Moonlit</text><text x="444" y="94" font-size="16" font-weight="500" fill="#0076FD" text-anchor="end">Done</text><text letter-spacing="1" x="78" y="126" font-size="12" font-weight="500" fill="#9a9a9a" text-anchor="start">NAME</text><rect x="76" y="136" width="368" height="40" rx="12" fill="#fff" fill-opacity=".07"/><text x="88" y="158" font-size="14" font-weight="400" fill="#fff" text-anchor="start">Moonlit</text><text letter-spacing="1" x="78" y="192" font-size="12" font-weight="500" fill="#9a9a9a" text-anchor="start">MODEL</text><rect x="76" y="202" width="368" height="40" rx="12" fill="rgba(255,255,255,.06)"/><text x="88" y="227.0" font-size="14" font-weight="400" fill="#fff" text-anchor="start">anima-base-v1.0</text><text x="430" y="227.0" font-size="18" font-weight="400" fill="#9a9a9a" text-anchor="end">›</text><text letter-spacing="1" x="78" y="258" font-size="12" font-weight="500" fill="#9a9a9a" text-anchor="start">LORAS</text><rect x="76" y="268" width="368" height="62" rx="12" fill="rgba(255,255,255,.06)"/><text x="88" y="291" font-size="14" font-weight="400" fill="#fff" text-anchor="start">moonlight_style_v2</text><text x="432" y="291" font-size="18" font-weight="400" fill="#9a9a9a" text-anchor="end">×</text><rect x="88" y="308" width="288" height="4" rx="2" fill="#414141"/><rect x="88" y="308" width="201.6" height="4" rx="2" fill="#ededed"/><rect x="274.6" y="301" width="30" height="18" rx="9" fill="#e9e9e9"/><text x="432" y="315" font-size="13" font-weight="400" fill="#9a9a9a" text-anchor="end">0.70</text><rect x="76" y="336" width="368" height="62" rx="12" fill="rgba(255,255,255,.06)"/><text x="88" y="359" font-size="14" font-weight="400" fill="#fff" text-anchor="start">watercolor_lite</text><text x="432" y="359" font-size="18" font-weight="400" fill="#9a9a9a" text-anchor="end">×</text><rect x="88" y="376" width="288" height="4" rx="2" fill="#414141"/><rect x="88" y="376" width="100.8" height="4" rx="2" fill="#ededed"/><rect x="173.8" y="369" width="30" height="18" rx="9" fill="#e9e9e9"/><text x="432" y="383" font-size="13" font-weight="400" fill="#9a9a9a" text-anchor="end">0.35</text><rect x="76" y="404" width="368" height="40" rx="12" fill="rgba(255,255,255,.06)"/><text x="260.0" y="430" font-size="14" font-weight="400" fill="#dcdcdc" text-anchor="middle">+  Add LoRA</text><text letter-spacing="1" x="78" y="460" font-size="12" font-weight="500" fill="#9a9a9a" text-anchor="start">PROMPT</text><rect x="76" y="470" width="368" height="60" rx="12" fill="#fff" fill-opacity=".07"/><text x="88" y="492" font-size="14" font-weight="400" fill="#fff" text-anchor="start">masterpiece, best quality, {prompt},</text><text x="88" y="511" font-size="14" font-weight="400" fill="#fff" text-anchor="start">night, moonlight, soft glow</text><text letter-spacing="1" x="78" y="546" font-size="12" font-weight="500" fill="#9a9a9a" text-anchor="start">NEGATIVE PROMPT</text><rect x="76" y="556" width="368" height="60" rx="12" fill="#fff" fill-opacity=".07"/><text x="88" y="578" font-size="14" font-weight="400" fill="#fff" text-anchor="start">worst quality, low quality, blurry,</text><text x="88" y="597" font-size="14" font-weight="400" fill="#fff" text-anchor="start">jpeg artifacts, watermark</text><text letter-spacing="1" x="78" y="632" font-size="12" font-weight="500" fill="#9a9a9a" text-anchor="start">DETAIL</text><rect x="76" y="642" width="368" height="36" rx="11" fill="rgba(255,255,255,.06)"/><text x="139.33333333333334" y="665" font-size="13.5" font-weight="400" fill="#9a9a9a" text-anchor="middle">Fast</text><rect x="199.66666666666669" y="645" width="120.66666666666667" height="30" rx="9" fill="#0076FD"/><text x="260.0" y="665" font-size="13.5" font-weight="400" fill="#fff" text-anchor="middle">Balanced</text><text x="380.6666666666667" y="665" font-size="13.5" font-weight="400" fill="#9a9a9a" text-anchor="middle">Fine</text><text x="78" y="714" font-size="15" font-weight="400" fill="#fff" text-anchor="start">Advanced</text><rect x="394" y="694" width="50" height="30" rx="15" fill="#747377"/><circle cx="409" cy="709" r="12" fill="#fff"/><rect x="490" y="200" width="360" height="65" rx="8" fill="#ffe36e"/>
+<text x="500" y="221" font-size="13" fill="#222">A · a page inside the Generate popover, as the</text>
+<text x="500" y="238" font-size="13" fill="#222">server view is. It scrolls; ‹ goes back to</text>
+<text x="500" y="255" font-size="13" fill="#222">the form. The canvas stays in view on the right.</text><rect x="490" y="420" width="330" height="48" rx="8" fill="#ffe36e"/>
+<text x="500" y="441" font-size="13" fill="#222">“Detail” sets steps and the sampler together;</text>
+<text x="500" y="458" font-size="13" fill="#222">Advanced shows the real numbers</text>
+<path d="M655.0 468 L424 700" stroke="#ffe36e" stroke-width="2.5" stroke-dasharray="6 5"/><circle cx="424" cy="700" r="5" fill="#ffe36e"/></svg>
+</section>
+
+<section>
+  <h2>A · The same page, Advanced on</h2>
+  <p>The numbers behind "Detail", and the rarer settings. At the bottom, Duplicate and Delete.</p>
+  <svg class="frame" viewBox="0 0 1120 800" role="img" font-family="Inter, system-ui, sans-serif"><use href="#art-original"/><rect x="0" y="0" width="1120" height="44" fill="#1c1c1c" fill-opacity=".92"/>
+<text x="40" y="28" font-size="17" fill="#aaa">Gallery</text>
+<circle cx="120" cy="22" r="15" fill="#141414"/>
+<rect x="114" y="16" width="12" height="12" rx="3" fill="#c7c7c7" opacity=".85"/>
+<circle cx="170" cy="22" r="15" fill="#141414"/>
+<rect x="164" y="16" width="12" height="12" rx="3" fill="#c7c7c7" opacity=".85"/>
+<circle cx="220" cy="22" r="15" fill="#141414"/>
+<rect x="214" y="16" width="12" height="12" rx="3" fill="#c7c7c7" opacity=".85"/>
+<circle cx="270" cy="22" r="15" fill="#141414"/>
+<rect x="264" y="16" width="12" height="12" rx="3" fill="#c7c7c7" opacity=".85"/>
+<circle cx="320" cy="22" r="15" fill="#0076FD"/>
+<text x="320" y="27" font-size="12" font-weight="700" text-anchor="middle" fill="#fff">AI</text>
+<rect x="870" y="12" width="20" height="20" rx="5" fill="#0076FD" opacity="1"/>
+<rect x="920" y="12" width="20" height="20" rx="5" fill="#d6d6d6" opacity="0.8"/>
+<rect x="970" y="12" width="20" height="20" rx="5" fill="#d6d6d6" opacity="0.8"/>
+<rect x="1020" y="12" width="20" height="20" rx="5" fill="#d6d6d6" opacity="0.8"/>
+<circle cx="1072" cy="22" r="15" fill="#f4f0e6"/>
+<rect x="0" y="140" width="44" height="460" rx="14" fill="#141414" fill-opacity=".85"/>
+<rect x="6" y="146" width="32" height="150" rx="8" fill="#3a3a3a"/><rect x="9" y="236" width="26" height="14" rx="7" fill="#c8c8c8"/>
+<rect x="12" y="316" width="20" height="20" rx="5" fill="none" stroke="#9a9a9a" stroke-width="2"/>
+<rect x="6" y="360" width="32" height="150" rx="8" fill="#3a3a3a"/><rect x="9" y="368" width="26" height="14" rx="7" fill="#c8c8c8"/><rect x="60" y="56" width="400" height="730" rx="22" fill="#1e1e1e" fill-opacity=".94" stroke="#fff" stroke-opacity=".08"/><path d="M310 57 L320 46 L330 57z" fill="#1e1e1e" fill-opacity=".94"/><text x="76" y="96" font-size="26" font-weight="400" fill="#0076FD" text-anchor="start">‹</text><text x="100" y="96" font-size="22" font-weight="700" fill="#c7c7c7" text-anchor="start">Moonlit</text><text x="444" y="94" font-size="16" font-weight="500" fill="#0076FD" text-anchor="end">Done</text><text x="78" y="140" font-size="15" font-weight="400" fill="#fff" text-anchor="start">Advanced</text><rect x="394" y="120" width="50" height="30" rx="15" fill="#0076FD"/><circle cx="429" cy="135" r="12" fill="#fff"/><rect x="76" y="168" width="368" height="40" rx="12" fill="rgba(255,255,255,.06)"/><text x="88" y="193.0" font-size="14" font-weight="400" fill="#fff" text-anchor="start">Sampler</text><text x="416" y="193.0" font-size="14" font-weight="400" fill="#9a9a9a" text-anchor="end">Euler ancestral</text><text x="430" y="193.0" font-size="18" font-weight="400" fill="#9a9a9a" text-anchor="end">›</text><rect x="76" y="216" width="368" height="40" rx="12" fill="rgba(255,255,255,.06)"/><text x="88" y="241.0" font-size="14" font-weight="400" fill="#fff" text-anchor="start">Scheduler</text><text x="416" y="241.0" font-size="14" font-weight="400" fill="#9a9a9a" text-anchor="end">Normal</text><text x="430" y="241.0" font-size="18" font-weight="400" fill="#9a9a9a" text-anchor="end">›</text><text x="80" y="276" font-size="14" font-weight="400" fill="#c1c1c1" text-anchor="start">Steps</text><text x="440" y="276" font-size="14" font-weight="400" fill="#ededed" text-anchor="end">24</text><rect x="80" y="288" width="360" height="4" rx="2" fill="#414141"/><rect x="80" y="288" width="144.0" height="4" rx="2" fill="#ededed"/><rect x="209.0" y="281" width="30" height="18" rx="9" fill="#e9e9e9"/><text x="80" y="324" font-size="14" font-weight="400" fill="#c1c1c1" text-anchor="start">CFG</text><text x="440" y="324" font-size="14" font-weight="400" fill="#ededed" text-anchor="end">4.0</text><rect x="80" y="336" width="360" height="4" rx="2" fill="#414141"/><rect x="80" y="336" width="108.0" height="4" rx="2" fill="#ededed"/><rect x="173.0" y="329" width="30" height="18" rx="9" fill="#e9e9e9"/><text x="80" y="372" font-size="14" font-weight="400" fill="#c1c1c1" text-anchor="start">Rescale CFG</text><text x="440" y="372" font-size="14" font-weight="400" fill="#ededed" text-anchor="end">0</text><rect x="80" y="384" width="360" height="4" rx="2" fill="#414141"/><rect x="80" y="384" width="0.0" height="4" rx="2" fill="#ededed"/><rect x="65.0" y="377" width="30" height="18" rx="9" fill="#e9e9e9"/><rect x="76" y="412" width="368" height="40" rx="12" fill="rgba(255,255,255,.06)"/><text x="88" y="437.0" font-size="14" font-weight="400" fill="#fff" text-anchor="start">VAE</text><text x="416" y="437.0" font-size="14" font-weight="400" fill="#9a9a9a" text-anchor="end">The model's own</text><text x="430" y="437.0" font-size="18" font-weight="400" fill="#9a9a9a" text-anchor="end">›</text><rect x="76" y="460" width="368" height="40" rx="12" fill="rgba(255,255,255,.06)"/><text x="88" y="485.0" font-size="14" font-weight="400" fill="#fff" text-anchor="start">Text encoder</text><text x="416" y="485.0" font-size="14" font-weight="400" fill="#9a9a9a" text-anchor="end">qwen_3_06b_base</text><text x="430" y="485.0" font-size="18" font-weight="400" fill="#9a9a9a" text-anchor="end">›</text><rect x="76" y="508" width="368" height="40" rx="12" fill="rgba(255,255,255,.06)"/><text x="88" y="533.0" font-size="14" font-weight="400" fill="#fff" text-anchor="start">Best size</text><text x="416" y="533.0" font-size="14" font-weight="400" fill="#9a9a9a" text-anchor="end">About 1 MP</text><text x="430" y="533.0" font-size="18" font-weight="400" fill="#9a9a9a" text-anchor="end">›</text><rect x="76" y="556" width="368" height="40" rx="12" fill="rgba(255,255,255,.06)"/><text x="88" y="581.0" font-size="14" font-weight="400" fill="#fff" text-anchor="start">Seed</text><text x="416" y="581.0" font-size="14" font-weight="400" fill="#9a9a9a" text-anchor="end">Random</text><text x="430" y="581.0" font-size="18" font-weight="400" fill="#9a9a9a" text-anchor="end">›</text><rect x="76" y="620" width="368" height="40" rx="12" fill="rgba(255,255,255,.06)"/><text x="260.0" y="646" font-size="14" font-weight="400" fill="#fff" text-anchor="middle">Duplicate style</text><rect x="76" y="668" width="368" height="40" rx="12" fill="rgba(255,255,255,.06)"/><text x="260.0" y="694" font-size="14" font-weight="400" fill="#ff6b6b" text-anchor="middle">Delete style</text><rect x="490" y="150" width="370" height="65" rx="8" fill="#ffe36e"/>
+<text x="500" y="171" font-size="13" fill="#222">Advanced on: everything Krita's style editor</text>
+<text x="500" y="188" font-size="13" fill="#222">has that Anima uses. (Clip skip, v-prediction and</text>
+<text x="500" y="205" font-size="13" fill="#222">live-painting settings are for other model kinds.)</text></svg>
+</section>
+
+<section>
+  <h2>B · A full-screen Style Studio <span style="color:var(--ok);font-size:13px">(chosen)</span></h2>
+  <p>Edit opens a screen of its own, as Brush Studio does for brushes. Sections on the left (Model, LoRAs, Prompts, Detail, Advanced, About), the section in the middle, and on the right a preview: "Try it" makes one small picture with the style as it is now.</p>
+  <svg class="frame" viewBox="0 0 1120 800" role="img" font-family="Inter, system-ui, sans-serif"><rect x="0" y="0" width="1120" height="800" fill="#161616"/><rect x="0" y="0" width="1120" height="56" fill="#1c1c1c"/><text x="32" y="36" font-size="16" font-weight="400" fill="#0076FD" text-anchor="start">Cancel</text><text x="560" y="36" font-size="18" font-weight="600" fill="#c7c7c7" text-anchor="middle">Style Studio</text><text x="1088" y="36" font-size="16" font-weight="600" fill="#0076FD" text-anchor="end">Done</text><rect x="16" y="72" width="220" height="712" rx="18" fill="#1e1e1e"/><text x="44" y="119" font-size="15.5" font-weight="400" fill="#c7c7c7" text-anchor="start">Model</text><rect x="26" y="144" width="200" height="42" rx="10" fill="#0076FD"/><text x="44" y="171" font-size="15.5" font-weight="400" fill="#fff" text-anchor="start">LoRAs</text><text x="44" y="223" font-size="15.5" font-weight="400" fill="#c7c7c7" text-anchor="start">Prompts</text><text x="44" y="275" font-size="15.5" font-weight="400" fill="#c7c7c7" text-anchor="start">Detail</text><text x="44" y="327" font-size="15.5" font-weight="400" fill="#c7c7c7" text-anchor="start">Advanced</text><text x="44" y="379" font-size="15.5" font-weight="400" fill="#c7c7c7" text-anchor="start">About</text><rect x="252" y="72" width="460" height="712" rx="18" fill="#1e1e1e"/><text x="276" y="112" font-size="22" font-weight="700" fill="#c7c7c7" text-anchor="start">LoRAs</text><rect x="276" y="132" width="412" height="62" rx="12" fill="rgba(255,255,255,.06)"/><text x="288" y="155" font-size="14" font-weight="400" fill="#fff" text-anchor="start">moonlight_style_v2</text><text x="676" y="155" font-size="18" font-weight="400" fill="#9a9a9a" text-anchor="end">×</text><rect x="288" y="172" width="332" height="4" rx="2" fill="#414141"/><rect x="288" y="172" width="232.39999999999998" height="4" rx="2" fill="#ededed"/><rect x="505.4" y="165" width="30" height="18" rx="9" fill="#e9e9e9"/><text x="676" y="179" font-size="13" font-weight="400" fill="#9a9a9a" text-anchor="end">0.70</text><rect x="276" y="202" width="412" height="62" rx="12" fill="rgba(255,255,255,.06)"/><text x="288" y="225" font-size="14" font-weight="400" fill="#fff" text-anchor="start">watercolor_lite</text><text x="676" y="225" font-size="18" font-weight="400" fill="#9a9a9a" text-anchor="end">×</text><rect x="288" y="242" width="332" height="4" rx="2" fill="#414141"/><rect x="288" y="242" width="116.19999999999999" height="4" rx="2" fill="#ededed"/><rect x="389.2" y="235" width="30" height="18" rx="9" fill="#e9e9e9"/><text x="676" y="249" font-size="13" font-weight="400" fill="#9a9a9a" text-anchor="end">0.35</text><rect x="276" y="272" width="412" height="40" rx="12" fill="rgba(255,255,255,.06)"/><text x="482" y="298" font-size="14" font-weight="400" fill="#dcdcdc" text-anchor="middle">+  Add LoRA</text><text letter-spacing="1" x="278" y="346" font-size="12" font-weight="500" fill="#9a9a9a" text-anchor="start">ON THE SERVER</text><rect x="276" y="358" width="412" height="40" rx="12" fill="rgba(255,255,255,.06)"/><text x="288" y="383.0" font-size="14" font-weight="400" fill="#fff" text-anchor="start">detailed_eyes_v3</text><text x="676" y="383.0" font-size="14" font-weight="400" fill="#9a9a9a" text-anchor="end">+</text><rect x="276" y="406" width="412" height="40" rx="12" fill="rgba(255,255,255,.06)"/><text x="288" y="431.0" font-size="14" font-weight="400" fill="#fff" text-anchor="start">flat_color_anime</text><text x="676" y="431.0" font-size="14" font-weight="400" fill="#9a9a9a" text-anchor="end">+</text><rect x="276" y="454" width="412" height="40" rx="12" fill="rgba(255,255,255,.06)"/><text x="288" y="479.0" font-size="14" font-weight="400" fill="#fff" text-anchor="start">ink_wash</text><text x="676" y="479.0" font-size="14" font-weight="400" fill="#9a9a9a" text-anchor="end">+</text><rect x="276" y="502" width="412" height="40" rx="12" fill="rgba(255,255,255,.06)"/><text x="288" y="527.0" font-size="14" font-weight="400" fill="#fff" text-anchor="start">pastel_dream</text><text x="676" y="527.0" font-size="14" font-weight="400" fill="#9a9a9a" text-anchor="end">+</text><rect x="276" y="550" width="412" height="40" rx="12" fill="rgba(255,255,255,.06)"/><text x="288" y="575.0" font-size="14" font-weight="400" fill="#fff" text-anchor="start">retro_90s</text><text x="676" y="575.0" font-size="14" font-weight="400" fill="#9a9a9a" text-anchor="end">+</text><rect x="728" y="72" width="376" height="712" rx="18" fill="#1e1e1e"/><text x="752" y="112" font-size="22" font-weight="700" fill="#c7c7c7" text-anchor="start">Preview</text><svg x="752" y="132" width="328" height="328" viewBox="200 0 800 800" preserveAspectRatio="xMidYMid slice"><use href="#art-r4"/></svg><rect x="752" y="476" width="328" height="60" rx="12" fill="#fff" fill-opacity=".07"/><text x="764" y="498" font-size="14" font-weight="400" fill="#fff" text-anchor="start">a lighthouse on a cliff, scenery,</text><text x="764" y="517" font-size="14" font-weight="400" fill="#fff" text-anchor="start">no humans</text><rect x="752" y="552" width="328" height="44" rx="14" fill="#0076FD"/><text x="916" y="580" font-size="15" font-weight="600" fill="#fff" text-anchor="middle">Try it</text><text x="752" y="624" font-size="12.5" font-weight="400" fill="#9a9a9a" text-anchor="start">Makes one small picture with this style,</text><text x="752" y="642" font-size="12.5" font-weight="400" fill="#9a9a9a" text-anchor="start">so you see what a change does.</text><rect x="300" y="640" width="370" height="65" rx="8" fill="#ffe36e"/>
+<text x="310" y="661" font-size="13" fill="#222">B · a full screen of its own, as Brush Studio is:</text>
+<text x="310" y="678" font-size="13" fill="#222">sections on the left, room for the LoRAs list,</text>
+<text x="310" y="695" font-size="13" fill="#222">and a preview that tries the style out</text></svg>
+</section>
+
+<section>
+  <h2>Side by side</h2>
+  <div class="cmp">
+    <div><h4>A · Page in the popover</h4><ul>
+      <li>Quick: two taps from the cards, and the canvas stays in view.</li>
+      <li>Same place and look as the server view: nothing new to learn.</li>
+      <li>One long column: with several LoRAs and Advanced on, a lot of scrolling.</li>
+      <li>No room for a preview; you try a change by generating on the canvas.</li>
+      <li>Less to build.</li>
+    </ul></div>
+    <div><h4>B · Style Studio</h4><ul>
+      <li>Room: the LoRA list, the server's LoRAs to pick from, and a preview side by side.</li>
+      <li>Feels like Brush Studio, ProCraft's own way of editing a brush.</li>
+      <li>Leaves the canvas: you don't see your artwork while editing.</li>
+      <li>"Try it" needs its own small run (a prompt just for previews).</li>
+      <li>More to build, on both apps.</li>
+    </ul></div>
+  </div>
+</section>
+
+<section>
+  <h2>What a style holds (both options)</h2>
+  <div class="list">Name · model (checkpoint) · LoRAs, each with a strength · prompt template with <code>{prompt}</code> · negative prompt · Detail (Fast · Balanced · Fine), and under Advanced: sampler, scheduler, steps, CFG, rescale CFG, VAE, text encoder, best size, seed. As Krita's style editor, less the settings Anima doesn't use (clip skip, v-prediction, the live-painting sampler).</div>
+</section>
+</main>
+</body>
+</html>

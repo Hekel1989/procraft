@@ -42,6 +42,21 @@ when something gets a name, and change it here first when a name changes.
 | **More menu** | ···: put the shown result's seed in the popover (locked), clear all results. | "Use the seed 18234", "Clear all results…" |
 | **Tuck** | Puts the tray away into its tab (also a tap on the canvas, or Esc). | ⌄ |
 
+## Styles (Phase 2, being designed: `04-phase2-brainstorm.md`)
+
+| Name | What it is | Shown as |
+|---|---|---|
+| **Built-in style** | A style that comes with the app (Anima, Anima Turbo): read-only, can be duplicated. | — |
+| **Style Studio** | The full-screen editor for a style, as Brush Studio is for brushes. Opened by holding a style card → Edit. | "Style Studio" |
+| **Family badge** | The small badge on a style card and a LoRA naming the model family it's for. | "Anima" |
+| **Best size** | A style's override for the size its model makes pictures at (Krita's "Preferred Resolution"): off by default, then one side in pixels. In a style's Advanced section. | "Best size", "Override" |
+| **LoRA** | A small add-on model a style uses, with a strength, to push a look or a character. | "LoRAs" |
+| **Trigger words** | Words a LoRA needs to take effect, kept with the LoRA and added to the prompt whenever a style uses it. | "Trigger words" |
+| **Advanced** | The Studio's section with the rarer settings (scheduler, rescale CFG, VAE, text encoder, best size). | "Advanced" |
+| **Preview prompt** | The prompt the Studio's Try it uses, typed by the user. | — |
+| **Try it** | The Studio's button that makes one small preview picture with the style as it is. | "Try it" |
+| **Styles folder** | The folder a person can open where styles are kept as `.toml` files: Documents › ProCraft Diffusion › Styles on Android, the app's data folder on the desktop. Changed in a setting. | "Styles folder", "Open styles folder" |
+
 ## Settings and set-up
 
 | Name | What it is | Shown as |

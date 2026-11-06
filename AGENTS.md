@@ -68,8 +68,10 @@ ProCraft's own design language. It goes upstream later.
 
 - `docs/generation/`: the source of truth. `01-brainstorm.md`, `02-proposal.md` (final),
   `03-design.md` (final, kept up to date as built: change it when behaviour changes),
-  `mockups/phase1.html`. Part D has the milestones and the decisions log. `names.md` lists what
-  each part is called (in the app, the docs and the code): add a name there first.
+  `mockups/phase1.html`. The design's Part D has the milestones and the decisions log. Phase 2:
+  `04-phase2-brainstorm.md`, then `05-styles-proposal.md` (style editing, the first part; final).
+  `names.md` lists what each part is called (in the app, the docs and the code): add a name there
+  first.
 - `crates/diffusion/`: the ComfyUI client and everything model-specific, with no GPU and no UI.
   `comfy.rs` (HTTP + WebSocket), `worker.rs` (runs requests on its own thread), `plan.rs`
   (resolution planner, context box), `family/anima.rs` (Anima graphs and tuned constants),
