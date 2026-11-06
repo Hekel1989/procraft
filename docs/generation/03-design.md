@@ -181,7 +181,7 @@ ProCraft's margins:
   krita-ai-diffusion does (the one-step `Scribble_PiDiNet_Preprocessor` left broken dots; changed
   2026-11-05 on the user's report). Needs the add-on, checked
   like the others (§B12); without it a trace says "needs comfyui_controlnet_aux".
-  *As built (2026-11-05):* the picture goes at its own size up to 3 MP, and the extractors are
+  *As built (2026-11-05):* the picture goes at its own size up to 4.2 MP (Anima's limit), and the extractors are
   asked for the shorter side rounded to 64 between 512 and 2048; the lines come back at the
   selected bounds' (or canvas's) size, their luminance becoming the layer's alpha. The core's
   `trace_control(session, layer)` starts it; the run reports `extracting`, its kind and
@@ -482,7 +482,7 @@ default. A control image is sent at each pass's size, so both passes of a two-pa
 it. A trace goes through its own family-free graph
 (`crates/diffusion/src/extract.rs`): `ETN_LoadImageBase64` → `AnimeLineArtPreprocessor`, or
 `PiDiNetPreprocessor` with `safe` on into `ScribblePreprocessor`, each at the shorter side rounded to 64 between 512 and
-2048 → `ETN_SendImageWebSocket` PNG; the picture is sent at its own size up to 3 MP and its lines
+2048 → `ETN_SendImageWebSocket` PNG; the picture is sent at its own size up to 4.2 MP and its lines
 are scaled back to the selected bounds.
 
 ## B7. Sizes: the resolution planner
@@ -500,24 +500,23 @@ context box):
 
 ### B7a. Generation resolution (decided 2026-11-05, built 2026-11-05)
 
-The area's **target size** is chosen in the popover; the model reaches it in one or two passes, as
-krita-ai-diffusion does (`backend/resolution.py`: canvas size × a multiplier, capped, and two
-passes when the target is much bigger than the model's size).
+The area's **target size** is chosen in the popover; the model makes it in **one pass** at that size,
+capped at the model's largest picture *(changed 2026-11-05, see the last notes: the first build made
+two passes above 1.5 × the model's size)*. krita-ai-diffusion does the same for Anima within 2048 ×
+2048 (`backend/resolution.py`: no Anima-specific range, so its defaults, sides to 2048 and up to
+2048² pixels, one pass inside them).
 
 **A "Resolution" row in the Generate popover**, three choices in the count's style:
 
 | Choice | Target size | How |
 |---|---|---|
 | **Draft** | the model's own size (≈ 1 MP, shape kept) | one pass, scaled to the area: fast, soft on big canvases (M2's behaviour) |
-| **Normal** | half the area's size each way (at least the model's size) | one pass if it's near the model's size, else two |
-| **Quality** (default) | the area's own size | one pass if it's near the model's size, else two |
+| **Normal** | half the area's size each way (at least the model's size) | one pass at the target |
+| **Quality** (default) | the area's own size | one pass at the target |
 
-- **Two passes** when the target is more than about 1.5 × the model's pixels: compose at ≈ 1 MP,
-  scale that up to the target, then refine at the target size with a low denoise (≈ 0.35–0.45, to
-  tune for Anima), same prompt, seed and style. Results are then scaled to the area if the target
-  was smaller (Normal) or capped.
-- **Small text under the row** says what will happen, e.g. "2800 × 2000 · 2 passes",
-  "1400 × 1000 · 2 passes", "1216 × 864 → scaled up", or "capped at 6 MP".
+- Results are scaled to the area if the target was smaller (Normal) or capped.
+- **Small text under the row** says what will happen, e.g. "1632 × 2048", "1216 × 864 → scaled
+  up", or "capped at 4.2 MP".
 - **The cap: "Largest picture"** in the server view, in megapixels, filled in from the GPU's memory
   as the server reports it (24 GB → 6 MP, 16 GB → 4, 12 GB → 3, 8 GB or less → 2) and changeable.
   A target above it is generated at the cap and scaled up.
@@ -537,6 +536,12 @@ passes when the target is much bigger than the model's size).
   for 2800 × 2000, under the note's 1.5×). The second pass refines at **0.3**: at 0.4 it changed
   details such as eye colour. Times on a 24 GB GPU, Anima style, 2800 × 2000: Draft ≈ 10 s warm,
   Quality (2048 × 1456, 2 passes) ≈ 33 s. The small text says "capped at 3 MP" there.
+- *One pass, up to 4.2 MP, as Krita (decided 2026-11-05 by the user):* pictures looked better in
+  Krita, which composes Anima at the full size in one pass. So the planner makes one pass at the
+  target and Anima's limit is **4.2 MP** (Krita's 2048 × 2048). 1632 × 2048 is made at its own size
+  (≈ 47 s with the Anima style on the 4090, clean); 2800 × 2000's Quality is 2416 × 1728, "capped at
+  4.2 MP", scaled up ≈ 1.16×. Unlike Krita, nothing is refined above the cap: bigger targets are
+  scaled up the rest. The graphs still take a second pass (`Plan::second`) should it come back.
 - *Selections, tried:* Add (a black cat on a table) and Remove (a vase) work at inpaint control
   strength 1.0; Remove at 100 % sometimes puts a small new object back. Fill on the tablet (a full
   moon in an ellipse of night sky) blends with no visible edge.

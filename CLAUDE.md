@@ -138,10 +138,10 @@ Package `io.github.hekel1989.procraftdiffusion.debug` (the old ProCraft debug ap
 
 ## Anima tuning (in `family/anima.rs`)
 
-- Native size about 1 MP; passes are made at **3 MP at most** (5.6 MP went soft and showed a
-  grid).
-- Two passes when the target is more than 1.5× the native pixels; the second at denoise **0.3**
-  (0.4 changed details such as eye colour).
+- Native size about 1 MP. Pictures are made in **one pass at the target, capped at 4.2 MP** (2048 ×
+  2048, krita-ai-diffusion's limit for Anima; the user finds Krita's one-pass pictures better).
+  Bigger targets are scaled up the rest. The graphs still support a second pass (denoise **0.3**
+  was tuned for it; 0.4 changed details such as eye colour), but the planner doesn't ask for one.
 - Selections are one pass at the capped target, with the LLLite inpaint control at strength 1.0.
 - Prompts are `masterpiece, best quality, <prompt>`.
 

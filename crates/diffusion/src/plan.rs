@@ -1,7 +1,7 @@
 //! The sizes to generate at: the area of the canvas is brought to a target size (the model's own,
-//! half the area's, or the whole area's), then made in one pass at about 1 MP or in two passes
-//! with the first at about 1 MP and the second at the target. Each pass's sides are multiples of 16
-//! (what the models' latents need); results are scaled to the area after the last pass.
+//! half the area's, or the whole area's), capped at the largest picture, then made in one pass at
+//! that size, as krita-ai-diffusion does within a model's range. Each pass's sides are multiples of
+//! 16 (what the models' latents need); results are scaled to the area after.
 
 /// Each side is a multiple of this.
 pub const MULTIPLE: u32 = 16;
@@ -13,9 +13,6 @@ const CONTEXT_MIN: u32 = 64;
 pub const MIN_SIDE: u32 = 512;
 pub const MAX_SIDE: u32 = 2048;
 
-/// A target more than this many times the model's pixels is refined at the target after composing
-/// at the model's size. The design's "about 1.5×".
-const TWO_PASS_FACTOR: f64 = 1.5;
 /// A megapixel here is a million pixels, as people mean by "6 MP", not 2²⁰.
 const MEGAPIXEL: f64 = 1_000_000.0;
 
@@ -62,7 +59,8 @@ impl Size {
 pub struct Plan {
     /// The first pass: the model's own size for a new picture, the target when refining.
     pub first: Size,
-    /// The second pass, when the target is worth refining.
+    /// A second pass refining the first at a larger size. The planner makes one pass (composing at
+    /// the target, as Krita does); the graphs still take a second.
     pub second: Option<Size>,
     /// The size results come back at (the last pass's size).
     pub size: Size,
@@ -139,15 +137,8 @@ pub fn plan_for(width: u32, height: u32, pixels: u32, resolution: Resolution, la
         let size = if target.pixels() < native.pixels() { native } else { grid(target) };
         return Plan { first: size, second: None, size, target, capped };
     }
-    let target_pixels = target.pixels();
-    let native_pixels = native.pixels();
-    // A Normal target is a quarter of the area: when it is still above the model's own plan the
-    // area is at least four times the model's size, so it is worth refining even under the cutoff.
-    let far = target_pixels as f64 > native_pixels as f64 * TWO_PASS_FACTOR;
-    if far {
-        let second = grid(target);
-        Plan { first: native, second: Some(second), size: second, target, capped }
-    } else if target_pixels > native_pixels || capped {
+    // one pass at the target: the model composes at the size it is made at
+    if target.pixels() > native.pixels() || capped {
         let size = grid(target);
         Plan { first: size, second: None, size, target, capped }
     } else {
@@ -237,13 +228,13 @@ mod tests {
     }
 
     #[test]
-    fn quality_gets_the_area_in_two_passes() {
+    fn quality_gets_the_area_in_one_pass() {
         let p = at(2800, 2000, Resolution::Quality, 6.0);
         assert_eq!(p.target, Size::new(2800, 2000));
         assert_eq!(p.target.pixels(), 5_600_000);
-        assert_eq!(p.passes(), 2);
-        assert_eq!(p.first, Size::new(1216, 864));
-        assert_eq!(p.second, Some(Size::new(2800, 2000)));
+        assert_eq!(p.passes(), 1);
+        assert_eq!(p.first, Size::new(2800, 2000));
+        assert_eq!(p.second, None);
         assert_eq!(p.size, Size::new(2800, 2000));
         assert!(!p.capped);
         assert!(!p.stretched(2800, 2000, 1.5));
@@ -256,7 +247,7 @@ mod tests {
         assert_eq!(p.passes(), 1, "near the model's size: one pass");
         assert_eq!(p.first, Size::new(1408, 1008));
         let big = at(4000, 3000, Resolution::Normal, 6.0);
-        assert_eq!((big.target, big.passes()), (Size::new(2000, 1500), 2));
+        assert_eq!((big.target, big.passes(), big.first), (Size::new(2000, 1500), 1, Size::new(2000, 1504)));
         assert!(p.stretched(2800, 2000, 1.5), "results are scaled up to the area");
     }
 
@@ -280,7 +271,7 @@ mod tests {
         assert_eq!(p.target.height % MULTIPLE, 0);
         assert!(p.target.pixels() <= 6_000_000, "{}", p.target.pixels());
         assert!(p.size.pixels() <= 6_000_000, "{}", p.size.pixels());
-        assert_eq!(p.passes(), 2);
+        assert_eq!((p.passes(), p.first), (1, Size::new(2448, 2448)));
     }
 
     #[test]

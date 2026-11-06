@@ -2075,12 +2075,12 @@ mod tests {
         let settings = GenerationSettings { address: String::new(), nsfw: false, largest_megapixels: Some(6.0) };
         let generation = Generation::new(settings);
         let quality = generation.size_for(&session, GenerationResolution::Quality);
-        // Anima's own limit (3 MP) caps it below the 6 MP setting
-        assert_eq!((quality.width, quality.height), (2048, 1456));
-        assert_eq!(quality.passes, 2);
-        assert_eq!((quality.from_width, quality.from_height), (2048, 1456));
+        // Anima's own limit (4.2 MP) caps it below the 6 MP setting, made in one pass
+        assert_eq!((quality.width, quality.height), (2416, 1728));
+        assert_eq!(quality.passes, 1);
+        assert_eq!((quality.from_width, quality.from_height), (2416, 1728));
         assert!(quality.capped);
-        assert_eq!(quality.largest_megapixels, 3.0);
+        assert_eq!(quality.largest_megapixels, 4.2);
         let normal = generation.size_for(&session, GenerationResolution::Normal);
         assert_eq!((normal.width, normal.height), (1400, 1000));
         assert_eq!(normal.passes, 1, "near the model's size: one pass");
@@ -2096,7 +2096,11 @@ mod tests {
         assert!(capped.capped);
         assert_eq!(capped.width % 16, 0);
         assert_eq!(capped.height % 16, 0);
-        assert!(u64::from(capped.width) * u64::from(capped.height) <= 3_000_000);
+        assert!(u64::from(capped.width) * u64::from(capped.height) <= 4_200_000);
+        // Krita's often-used 1632 × 2048 (3.3 MP) is made at its own size in one pass, not capped
+        let tall = generation.size_for(&CanvasSession::new(1632, 2048), GenerationResolution::Quality);
+        assert!(!tall.capped);
+        assert_eq!((tall.from_width, tall.from_height, tall.passes), (1632, 2048, 1));
     }
 
     #[test]

@@ -14,9 +14,10 @@ pub(super) const NATIVE_PIXELS: u32 = 1024 * 1024;
 /// How much the second pass of a two-pass picture changes it: enough to add detail, too little to
 /// invent a new composition.
 pub(super) const SECOND_PASS_DENOISE: f64 = 0.3;
-/// The most pixels a pass is made at, in megapixels: past about 3 MP Anima's pictures go soft and
-/// show a faint grid (tried at 5.6 MP on 2800 × 2000), so bigger targets are scaled up the rest.
-pub(super) const MOST_MEGAPIXELS: f32 = 3.0;
+/// The most pixels a picture is made at, in one pass, in megapixels: krita-ai-diffusion's limit for
+/// Anima (2048 × 2048, about 4.2 MP), where the user finds it clean (1632 × 2048 often); bigger
+/// targets are scaled up the rest. (A 5.6 MP second pass over a 1 MP picture went soft with a grid.)
+pub(super) const MOST_MEGAPIXELS: f32 = 4.2;
 /// The inpaint control's strength: the LLLite layer follows the mask whole.
 pub(super) const INPAINT_CONTROL_STRENGTH: f64 = 1.0;
 /// How closely a control layer is followed, as (strength, how far through sampling it applies):
