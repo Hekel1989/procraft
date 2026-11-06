@@ -37,8 +37,11 @@ with these changes:
   logos.
 - **The card's second line** stays "30 steps · CFG 4". When something the style needs isn't on
   the server, it reads "Missing LoRA" or "Missing model" in amber instead.
-- **A "+" card at the end** of the strip, half as wide, opens a small menu: **New from
-  "Anima"** (a copy of the chosen style, opened in the Studio) and **Import a style…**.
+- **A "+" card at the end** of the strip, half as wide: a **New style**, opened in the Studio. It
+  starts from the first built-in style's settings (a style needs a model and a sampler), named
+  "New style". To start from another style, Duplicate it. *(Changed 2026-11-06, on the user's
+  word: it was a menu with "New from" the chosen style. Import goes in the server view's Styles
+  folder row instead, in M8.)*
 - **Hold a card** (desktop: hold or right-click) to get a small menu above it, drawn like the
   result's Delete bubble:
   - your styles: **Edit · Duplicate · Export · Delete**;
@@ -431,10 +434,54 @@ trigger = "@dragonball"
       "Can't be read";
     - a Best size style's plan reads "2 passes".
 
+*M7 as built (2026-11-06):*
+- **`crates/diffusion`**: `style_edit.rs`, which finds a style's settings by id (filled from its
+  family's own), makes a "<name> copy", picks a free file name (`Moonlit 2.toml`), and writes the
+  file in place with `toml_edit`. Comments, the order and unknown keys stay; a renamed or dropped
+  LoRA's section goes, a kept one keeps its comments.
+- **Core**: `generation_studio.rs`:
+  - `style_edit`, `duplicate_style`, `style_text`, `style_file_name`, `checkpoint_for` and
+    `server_lists`;
+  - a style's LoRAs named as the server lists them (`anima/x.safetensors` for `x.safetensors`),
+    so the Studio sees they're there;
+  - Try it (`try_style`, `cancel_try`, `studio_state`, `close_studio`): a Draft-size picture in
+    the canvas's shape, waiting behind a canvas run, kept at most 1024 a side and never in the
+    results tray.
+- **Both apps**:
+  - the hold menu (desktop: hold or right-click), the + card (a New style), and Delete with its
+    alert;
+  - each LoRA's **Trigger words** field (brought forward from M8 at the user's asking): read from
+    the server's `loras.toml` and saved there on Done (`save_lora_notes`, in place with
+    `toml_edit`, on a thread of its own; a file that can't be read is left alone, and the reason
+    shows under Generate);
+  - the Studio with its five pages, lists replacing the page when choosing, the name renamed in
+    its heading, Try it with its seed, dice and four tries.
+  - **Desktop**: `generation_studio.rs`, drawn over the window as Brush Studio is, with Open
+    styles folder on the pages card. **Android**: `StyleStudio.kt`, with the portrait layout's
+    pages as a row of tabs above the settings rather than Brush Studio's icon rail.
+  - The first save without a folder asks the question of A6; before the grant, the app reads
+    and writes its own files in the default folder through MediaStore.
+- **On Android the Studio sits above the keyboard** (`imePadding`), so the preview prompt and
+  the fields stay in view while typing.
+- **Left for M8**: the trigger words' pre-fill from the LoRA's metadata, Import, Export,
+  the server view's folder setting on the desktop, and typed values on the sliders. The preview
+  prompt is kept while the app runs, not across restarts yet.
+- **Checked on the tablet**:
+  - the hold menu;
+  - Edit;
+  - Try it running to a picture (checked by its pixels, not looked at);
+  - Done keeping a comment written by hand;
+  - Delete with its alert;
+  - Duplicate of Anima writing `Anima copy.toml`;
+  - the keyboard leaving the preview prompt in view, a trigger word saved on the server and shown
+    again, and + opening a New style.
+- **Checked on the desktop**: the Studio, the + card and the trigger words read from the
+  server.
+
 | Milestone | Work |
 |---|---|
 | **M6 Styles as files, with LoRAs** | `styles.rs` on TOML (built-ins moved); `loras.rs` reading `loras.toml`; LoRAs, rescale CFG, VAE and text encoder in the Anima graph; trigger words in the prompt; best size in the planner; core's `set_style_files` and the new `StyleInfo`; both apps reading the folder, the card order, badges and missing notes; Android's first save, question and picker (tested with a style written by hand); `diffusion-cli --style <file>` |
-| **M7 The Style Studio** | The hold menu and + card (Edit, Duplicate, Delete, New from); the Studio on both apps, with its five pages and the server's lists; `style_text` saving with comments kept; Try it with its seed, dice and tries; the states of A7 |
+| **M7 The Style Studio** | The hold menu (Edit, Duplicate, Delete) and the + card (New style); the Studio on both apps, with its five pages and the server's lists; `style_text` saving with comments kept; Try it with its seed, dice and tries; the states of A7 |
 | **M8 Trigger words and sharing** | `look_up_lora` with the metadata and the tag list, the pre-fill and chips; `save_lora_notes`; Export and Import; Open styles folder; the Styles folder setting on both apps |
 
 ---

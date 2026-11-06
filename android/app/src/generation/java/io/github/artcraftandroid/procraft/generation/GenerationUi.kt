@@ -184,6 +184,9 @@ object GenerationUi {
     private var state by mutableStateOf(GenerationState(null, emptyList(), null, null))
     // counts the times the styles folder was read, so the cards follow it
     private var stylesRead by mutableStateOf(0)
+    // a style card's menu (its id; "+" for the + card's), and a style being asked about deleting
+    private var styleMenu by mutableStateOf<String?>(null)
+    private var styleDeleting by mutableStateOf<io.github.artcraftandroid.procraft.core.StyleInfo?>(null)
     private var server by mutableStateOf<ServerStatus?>(null)
     private var last: RunSettings? = null
     private var error by mutableStateOf<String?>(null)
@@ -230,6 +233,8 @@ object GenerationUi {
         // a trace landed in a control layer: the layers panel shows it
         if (state.madeLayer != null) refreshLayers?.invoke()
         server = g.server()
+        // the trigger words couldn't be kept on the server: said under Generate
+        g.takeNotesError()?.let { error = it }
         val ids = state.results.map { it.id }.toSet()
         bitmaps.keys.retainAll(ids)
         for (r in state.results) if (r.id !in bitmaps) bitmaps[r.id] = r.thumbnail.bitmap()
@@ -393,10 +398,12 @@ object GenerationUi {
             Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (s in styles) {
                     val shape = RoundedCornerShape(12.dp)
+                    Box {
                     Column(
                         Modifier.width(116.dp).height(76.dp).clip(shape).background(Card)
                             .then(if (s.id == style) Modifier.border(2.dp, Pc.Accent, shape) else Modifier)
-                            .tap { style = s.id }.padding(10.dp),
+                            .combinedClickable(remember { MutableInteractionSource() }, indication = null, onLongClick = { styleMenu = s.id }, onClick = { style = s.id })
+                            .padding(10.dp),
                     ) {
                         Row(Modifier.weight(1f)) {
                             Text(s.name, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -405,6 +412,14 @@ object GenerationUi {
                         val note = s.note
                         if (note != null) Text(note, color = WARN, fontSize = 11.sp, maxLines = 1)
                         else Text("${s.steps} steps · CFG ${s.cfg}", color = Dim, fontSize = 11.sp, maxLines = 1)
+                    }
+                    if (styleMenu == s.id) StyleMenu(g, s)
+                    }
+                }
+                // the + card: a new style from the chosen one
+                Box {
+                    Box(Modifier.width(56.dp).height(76.dp).clip(RoundedCornerShape(12.dp)).background(Card).tap { g.newStyle()?.let { StyleStudio.start(g, it, null, null) } }, contentAlignment = Alignment.Center) {
+                        Text("+", color = Dim, fontSize = 26.sp)
                     }
                 }
                 if (styles.isEmpty()) Text("No Anima model on the server", color = Dim, fontSize = 14.sp, modifier = Modifier.padding(vertical = 26.dp))
@@ -576,6 +591,92 @@ object GenerationUi {
             ) { Text(words, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold) }
             if (needsPrompt && running == null) Text("Add needs a prompt: say what to put there.", color = Dim, fontSize = 13.sp, modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 10.dp))
             (error ?: state.error ?: blocked?.takeIf { running == null })?.let { Text(it, color = WARN, fontSize = 13.sp, modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 10.dp)) }
+        }
+    }
+
+    /** A style card's menu under it: Edit, Duplicate, Delete for the person's own, Duplicate for the rest; the + card's: New from the chosen style. */
+    @Composable
+    private fun StyleMenu(g: Generation, s: io.github.artcraftandroid.procraft.core.StyleInfo) {
+        val context = LocalContext.current
+        val items = when {
+            s.file != null && s.note == "Can't be read" -> listOf("Delete…")
+            s.file != null -> listOf("Edit", "Duplicate", "Delete…")
+            else -> listOf("Duplicate")
+        }
+        val down = with(LocalDensity.current) { (76.dp + 6.dp).roundToPx() }
+        androidx.compose.ui.window.Popup(
+            offset = androidx.compose.ui.unit.IntOffset(0, down),
+            onDismissRequest = { styleMenu = null },
+            properties = androidx.compose.ui.window.PopupProperties(focusable = true),
+        ) {
+            Column(Modifier.width(220.dp).clip(RoundedCornerShape(14.dp)).background(if (Pc.light) Color(0xF7FAFAFA) else Color(0xF7313135))) {
+                items.forEachIndexed { i, item ->
+                    if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(if (Pc.light) Color(0x1F000000) else Color(0x1FFFFFFF)))
+                    Text(
+                        item, color = if (item.startsWith("Delete")) Color(0xFFE84F51) else Ink, fontSize = 15.sp,
+                        modifier = Modifier.fillMaxWidth().tap {
+                            styleMenu = null
+                            val id = s.id
+                            when (item) {
+                                "Edit" -> {
+                                    val file = s.file
+                                    val old = file?.let { f -> StylesFolder.read(context).firstOrNull { it.name == f }?.text }
+                                    g.styleEdit(id)?.let { StyleStudio.start(g, it, file, old) }
+                                }
+                                "Delete…" -> styleDeleting = s
+                                else -> g.duplicateStyle(id)?.let { StyleStudio.start(g, it, null, null) }
+                            }
+                        }.padding(horizontal = 16.dp, vertical = 13.dp),
+                    )
+                }
+            }
+        }
+    }
+
+    /** The Style Studio over everything while it's open; after the first save without a folder, the question about it. */
+    @Composable
+    fun StyleStudio(vm: CanvasViewModel) {
+        val context = LocalContext.current
+        val g = generation(context)
+        fun reread() {
+            g.setStyleFiles(StylesFolder.read(context))
+            stylesRead++
+        }
+        val pick = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()) { tree ->
+            if (tree != null) StylesFolder.chosen(context, tree)
+            reread()
+        }
+        io.github.artcraftandroid.procraft.ui.Alert(
+            styleDeleting,
+            title = { s -> "Delete \u201c${s.name}\u201d?" },
+            message = { "Its file is removed from the styles folder." },
+            action = "Delete",
+            onCancel = { styleDeleting = null },
+            onAction = { s ->
+                styleDeleting = null
+                s.file?.let { f -> StylesFolder.delete(context, f)?.let { error = "Couldn't delete the style: $it" } }
+                reread()
+            },
+        )
+        io.github.artcraftandroid.procraft.ui.Alert(
+            if (StyleStudio.asking) Unit else null,
+            title = { "Keep your styles in Documents › ProCraft Diffusion › Styles?" },
+            message = { "Android will ask you to let ProCraft Diffusion use that folder, so it sees styles you add there yourself." },
+            action = "Continue",
+            cancel = "Not now",
+            destructive = false,
+            onCancel = { StyleStudio.asking = false },
+            onAction = { StyleStudio.asking = false; pick.launch(StylesFolder.prepare(context)) },
+        )
+        androidx.compose.animation.AnimatedVisibility(
+            StyleStudio.isOpen,
+            enter = androidx.compose.animation.slideInVertically { it },
+            exit = androidx.compose.animation.slideOutVertically { it },
+        ) {
+            StyleStudio.Screen(vm, g) { saved ->
+                if (saved != null) style = "user:$saved"
+                reread()
+            }
         }
     }
 

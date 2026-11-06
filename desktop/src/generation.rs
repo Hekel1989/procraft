@@ -166,6 +166,16 @@ pub struct GenerationUi {
     styles_folder: crate::generation_styles::StylesFolder,
     /// The chosen style can't run, so the form shows why under Generate.
     style_blocked: bool,
+    /// A style card's menu (its id; none for the + card's) and the card it hangs from.
+    style_menu: Option<(Option<String>, Rect)>,
+    /// A style being asked about deleting: its file and name.
+    style_delete: Option<(String, String)>,
+    delete_alert: crate::alert::Alert,
+    /// The Style Studio, while open, and its preview prompt (kept while the app runs).
+    studio: Option<crate::generation_studio::StyleStudio>,
+    preview_prompt: String,
+    /// Why the trigger words couldn't be saved on the server, shown until the next run.
+    notes_error: Option<String>,
 }
 
 impl GenerationUi {
@@ -227,6 +237,12 @@ impl GenerationUi {
             control_steps: HashMap::new(),
             styles_folder: Default::default(),
             style_blocked: false,
+            style_menu: None,
+            style_delete: None,
+            delete_alert: crate::alert::Alert::default(),
+            studio: None,
+            preview_prompt: crate::generation_studio::PREVIEW_PROMPT.to_owned(),
+            notes_error: None,
         }
     }
 
@@ -235,6 +251,9 @@ impl GenerationUi {
         let newest = self.state.results.last().map(|r| r.id);
         let failed = self.state.error.is_some();
         self.state = self.generation.state();
+        if let Some(e) = self.generation.take_notes_error() {
+            self.notes_error = Some(e);
+        }
         // a run's first picture, or its failure, brings the tray up (results read back from the
         // artwork's folder don't)
         if self.was_running
@@ -352,6 +371,15 @@ impl GenerationUi {
             self.selection_area = area;
             self.mode = None;
         }
+        if let Some(crate::alert::Answer::Action) = self.delete_alert.show(ctx, look)
+            && let Some((file, _)) = self.style_delete.take()
+        {
+            if let Err(e) = std::fs::remove_file(crate::generation_styles::styles_dir().join(&file)) {
+                self.state.error = Some(format!("Couldn't delete the style: {e}"));
+            }
+            self.styles_folder = Default::default();
+            self.styles_folder.refresh(&self.generation);
+        }
         let content = match (self.view, self.server.connection) {
             (View::Server, _) => self.server_height(),
             (View::Form, ServerConnection::NotSet) => 230.0,
@@ -373,7 +401,8 @@ impl GenerationUi {
     }
 
     fn form_height(&self) -> f32 {
-        let error = if self.state.error.is_some() || self.style_blocked { 40.0 } else { 0.0 };
+        let error =
+            if self.state.error.is_some() || self.notes_error.is_some() || self.style_blocked { 40.0 } else { 0.0 };
         let selection = if self.selection.is_some() { 70.0 } else { 0.0 };
         let controls = 22.0 + CONTROL_ROW * self.controls.len() as f32 + ADD_ROW + 10.0;
         let strip = crate::generation_tags::STRIP_HEIGHT + crate::generation_tags::STRIP_GAP;
@@ -449,8 +478,23 @@ impl GenerationUi {
         {
             self.style = first.id.clone();
         }
-        if let Some(id) = crate::generation_styles::strip(ui, pos2(left, y), right - left, &styles, &self.style) {
-            self.style = id;
+        match crate::generation_styles::strip(ui, pos2(left, y), right - left, &styles, &self.style) {
+            Some(crate::generation_styles::StripAction::Pick(id)) => {
+                self.style = id;
+                self.style_menu = None;
+            }
+            Some(crate::generation_styles::StripAction::Hold(id, card)) => self.style_menu = Some((Some(id), card)),
+            Some(crate::generation_styles::StripAction::Plus) => {
+                self.style_menu = None;
+                if let Some(edit) = self.generation.new_style() {
+                    self.studio =
+                        Some(crate::generation_studio::StyleStudio::new(self.generation.clone(), edit, None, None));
+                }
+            }
+            None => {}
+        }
+        if let Some((target, card)) = self.style_menu.clone() {
+            self.style_menu_show(ui.ctx(), &styles, target, card);
         }
         let blocked = styles.iter().find(|s| s.id == self.style).and_then(|s| s.reason.clone());
         self.style_blocked = blocked.is_some();
@@ -816,7 +860,9 @@ impl GenerationUi {
         }
         y += 60.0;
         let idle = self.state.running.is_none();
-        if let Some(error) = self.state.error.as_ref().or(blocked.as_ref().filter(|_| idle)) {
+        if let Some(error) =
+            self.state.error.as_ref().or(self.notes_error.as_ref()).or(blocked.as_ref().filter(|_| idle))
+        {
             let at = Rect::from_min_max(pos2(left + 2.0, y), pos2(right, y + 36.0));
             ui.scope_builder(UiBuilder::new().max_rect(at), |ui| {
                 ui.add(
@@ -827,8 +873,109 @@ impl GenerationUi {
         }
     }
 
+    /// A style card's menu under it: Edit, Duplicate, Delete for the person's own, Duplicate for
+    /// the rest; the + card's, New from the chosen style.
+    fn style_menu_show(
+        &mut self,
+        ctx: &egui::Context,
+        styles: &[procraft_core::StyleInfo],
+        target: Option<String>,
+        card: Rect,
+    ) {
+        let style = target.as_ref().and_then(|id| styles.iter().find(|s| &s.id == id));
+        let items: Vec<String> = match (target.is_some(), style) {
+            (true, Some(s)) if s.file.is_some() && s.note.as_deref() == Some("Can't be read") => vec!["Delete…".into()],
+            (true, Some(s)) if s.file.is_some() => vec!["Edit".into(), "Duplicate".into(), "Delete…".into()],
+            (true, _) => vec!["Duplicate".into()],
+            (false, _) => vec!["New style".into()],
+        };
+        let menu = Rect::from_min_size(pos2(card.left(), card.bottom() + 6.0), vec2(220.0, 44.0 * items.len() as f32));
+        let mut picked = None;
+        egui::Area::new(Id::unique("style card menu")).fixed_pos(menu.min).order(Order::Tooltip).show(ctx, |ui| {
+            ui.allocate_rect(menu, Sense::click());
+            ui.painter().rect_filled(menu, 14.0, argb(MENU_FILL));
+            for (i, item) in items.iter().enumerate() {
+                let row =
+                    Rect::from_min_size(pos2(menu.left(), menu.top() + 44.0 * i as f32), vec2(menu.width(), 44.0));
+                if i > 0 {
+                    ui.painter()
+                        .line_segment([row.left_top(), row.right_top()], egui::Stroke::new(1.0, argb(MENU_LINE)));
+                }
+                let ink = if item.starts_with("Delete") { Color32::from_rgb(0xE8, 0x4F, 0x51) } else { argb(INK) };
+                text(
+                    ui.painter(),
+                    pos2(row.left() + 16.0, row.center().y),
+                    Align2::LEFT_CENTER,
+                    item,
+                    15.0,
+                    Weight::Regular,
+                    ink,
+                );
+                if ui.interact(row, ui.scope_id().with(("style menu", i)), Sense::click()).clicked() {
+                    picked = Some(item.clone());
+                }
+            }
+        });
+        let pressed_outside = ctx.input(|i| {
+            i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !menu.contains(p) && !card.contains(p))
+        });
+        if pressed_outside {
+            self.style_menu = None;
+        }
+        let Some(item) = picked else { return };
+        self.style_menu = None;
+        let id = target.unwrap_or_else(|| self.style.clone());
+        match item.as_str() {
+            "Edit" => {
+                let file = style.and_then(|s| s.file.clone());
+                let old = file
+                    .as_ref()
+                    .and_then(|f| std::fs::read_to_string(crate::generation_styles::styles_dir().join(f)).ok());
+                if let Some(edit) = self.generation.style_edit(id) {
+                    self.studio =
+                        Some(crate::generation_studio::StyleStudio::new(self.generation.clone(), edit, file, old));
+                }
+            }
+            "Delete…" => {
+                if let Some(s) = style
+                    && let Some(file) = &s.file
+                {
+                    self.style_delete = Some((file.clone(), s.name.clone()));
+                    let title = format!("Delete \u{201c}{}\u{201d}?", s.name);
+                    self.delete_alert.open(&title, "Its file is removed from the styles folder.", "Delete", None);
+                }
+            }
+            _ => {
+                if let Some(edit) = self.generation.duplicate_style(id) {
+                    self.studio =
+                        Some(crate::generation_studio::StyleStudio::new(self.generation.clone(), edit, None, None));
+                }
+            }
+        }
+    }
+
+    /// The Style Studio is open (it covers the window).
+    pub fn studio_open(&self) -> bool {
+        self.studio.is_some()
+    }
+
+    /// Draws the Style Studio over the window; when it closes, the styles folder is read again and
+    /// a saved style is chosen.
+    pub fn studio(&mut self, ctx: &egui::Context, look: &mut Look, session: &CanvasSession) {
+        let info = session.info();
+        let Some(studio) = self.studio.as_mut() else { return };
+        let Some(closed) = studio.show(ctx, look, &mut self.preview_prompt, (info.width, info.height)) else { return };
+        self.studio = None;
+        if let crate::generation_studio::Closed::Saved(file) = closed {
+            self.style = format!("user:{file}");
+        }
+        self.styles_folder = Default::default();
+        self.styles_folder.refresh(&self.generation);
+    }
+
     /// Starts a run with the form's settings (a new seed unless one is kept, or `seed`).
     fn run(&mut self, session: &CanvasSession, seed: Option<u64>) {
+        self.notes_error = None;
         let controls = self
             .controls
             .iter()
@@ -1477,7 +1624,7 @@ fn label(ui: &Ui, at: egui::Pos2, words: &str) {
 }
 
 /// A slider along `track` at `value` (0..1); where it's dragged or tapped to, if it was.
-fn slider(ui: &Ui, _look: &mut Look, track: Rect, value: f32, id: &str) -> Option<f32> {
+pub(crate) fn slider(ui: &Ui, _look: &mut Look, track: Rect, value: f32, id: &str) -> Option<f32> {
     let hit = track.expand2(vec2(10.0, 14.0));
     let response = ui.interact(hit, ui.scope_id().with(id), Sense::click_and_drag());
     let at = track.left() + track.width() * value.clamp(0.0, 1.0);
@@ -1509,7 +1656,7 @@ fn pill(ui: &Ui, x: &mut f32, cy: f32, words: &str, primary: bool, enabled: bool
 }
 
 /// A progress ring: grey all round, blue for the part done.
-fn ring(ui: &Ui, centre: egui::Pos2, radius: f32, done: f32) {
+pub(crate) fn ring(ui: &Ui, centre: egui::Pos2, radius: f32, done: f32) {
     ui.painter().circle_stroke(centre, radius, egui::Stroke::new(3.0, Color32::from_gray(70)));
     let steps = 48;
     let end = (done.clamp(0.0, 1.0) * steps as f32).round() as usize;
@@ -1525,12 +1672,12 @@ fn ring(ui: &Ui, centre: egui::Pos2, radius: f32, done: f32) {
 }
 
 /// `size` fitted inside `cell`, centred.
-fn fit(cell: Rect, size: egui::Vec2) -> Rect {
+pub(crate) fn fit(cell: Rect, size: egui::Vec2) -> Rect {
     let scale = (cell.width() / size.x.max(1.0)).min(cell.height() / size.y.max(1.0));
     Rect::from_center_size(cell.center(), size * scale)
 }
 
-fn texture(ctx: &egui::Context, name: &str, image: &ThumbnailImage) -> TextureHandle {
+pub(crate) fn texture(ctx: &egui::Context, name: &str, image: &ThumbnailImage) -> TextureHandle {
     let size = [image.width as usize, image.height as usize];
     let picture = egui::ColorImage::from_rgba_premultiplied(size, &image.rgba);
     ctx.load_texture(name, picture, TextureOptions::LINEAR)

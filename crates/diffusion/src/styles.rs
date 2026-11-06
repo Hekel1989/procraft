@@ -102,28 +102,29 @@ const BUILT_IN: [(&str, &str); 2] =
 pub const BEST_SIZE_MIN: u32 = 256;
 pub const BEST_SIZE_MAX: u32 = 2048;
 
-/// A style as written in its file, before it's matched to a server.
+/// A style as written in its file, before it's matched to a server: what the Style Studio edits.
 #[derive(Clone, Debug, PartialEq)]
-struct Written {
-    name: Option<String>,
-    family: Family,
+pub struct StyleSettings {
+    pub name: Option<String>,
+    pub family: Family,
     /// The checkpoint by file name or pattern, best first.
-    models: Vec<String>,
-    template: String,
-    negative: String,
-    sampler: Option<String>,
-    scheduler: Option<String>,
-    steps: Option<u32>,
-    cfg: Option<f32>,
-    loras: Vec<(String, f32)>,
-    rescale_cfg: Option<f32>,
-    vae: Option<String>,
-    text_encoder: Option<String>,
-    best_size: Option<u32>,
+    pub models: Vec<String>,
+    pub template: String,
+    pub negative: String,
+    pub sampler: Option<String>,
+    pub scheduler: Option<String>,
+    pub steps: Option<u32>,
+    pub cfg: Option<f32>,
+    /// Each LoRA's file and strength.
+    pub loras: Vec<(String, f32)>,
+    pub rescale_cfg: Option<f32>,
+    pub vae: Option<String>,
+    pub text_encoder: Option<String>,
+    pub best_size: Option<u32>,
 }
 
 /// Reads a style's text; the reason it can't be, with the line, when it can't.
-fn read(text: &str) -> Result<Written, String> {
+pub fn read(text: &str) -> Result<StyleSettings, String> {
     let doc: DocumentMut = text.parse().map_err(|e: toml_edit::TomlError| plain_error(text, &e))?;
     let string = |key: &str| -> Result<Option<String>, String> {
         match doc.get(key) {
@@ -185,7 +186,7 @@ fn read(text: &str) -> Result<Written, String> {
         }
     }
     let optional = |key: &str| -> Result<Option<f32>, String> { doc.get(key).map(|i| number(i, key)).transpose() };
-    Ok(Written {
+    Ok(StyleSettings {
         name: string("name")?.filter(|n| !n.trim().is_empty()),
         family,
         models,
@@ -215,13 +216,13 @@ pub(crate) fn plain_error(text: &str, e: &toml_edit::TomlError) -> String {
 }
 
 /// The built-in styles as written. They're tested, so they always read.
-fn built_in_written() -> Vec<(&'static str, Written)> {
+pub(crate) fn built_in_written() -> Vec<(&'static str, StyleSettings)> {
     BUILT_IN.iter().filter_map(|(id, text)| read(text).ok().map(|w| (*id, w))).collect()
 }
 
 /// The file on the server for `wanted`: the same path, else the same file in another folder, else
 /// the first a pattern (with `*`) matches.
-fn find(wanted: &str, files: &[String]) -> Option<String> {
+pub fn find(wanted: &str, files: &[String]) -> Option<String> {
     let wanted = wanted.trim();
     let name = |f: &str| f.rsplit(['/', '\\']).next().unwrap_or(f).to_lowercase();
     files
@@ -234,15 +235,15 @@ fn find(wanted: &str, files: &[String]) -> Option<String> {
         .cloned()
 }
 
-impl Written {
+impl StyleSettings {
     /// The style it makes on a server with `models`, with the gaps of `base` (its family's first
     /// built-in style) filled in and its LoRAs' trigger words from `notes`.
-    fn style(
+    pub fn style(
         &self,
         id: String,
         name: String,
         kind: Kind,
-        base: Option<&Written>,
+        base: Option<&StyleSettings>,
         models: &ServerModels,
         notes: &LoraNotes,
     ) -> Style {
@@ -277,7 +278,7 @@ impl Written {
                 LoraUse { file, strength: *strength, trigger }
             })
             .collect();
-        let or_base = |own: &Option<String>, of: fn(&Written) -> &Option<String>, fallback: &str| {
+        let or_base = |own: &Option<String>, of: fn(&StyleSettings) -> &Option<String>, fallback: &str| {
             own.clone().or_else(|| base.and_then(|b| of(b).clone())).unwrap_or_else(|| fallback.to_owned())
         };
         Style {

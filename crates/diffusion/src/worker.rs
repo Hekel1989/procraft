@@ -156,6 +156,11 @@ impl Worker {
         Worker { shared, thread }
     }
 
+    /// The server's LoRA notes changed (written by the app): runs and styles use these from now on.
+    pub fn set_lora_notes(&self, notes: LoraNotes) {
+        self.shared.inner.lock().server.lora_notes = notes;
+    }
+
     /// Uses the server at `address` (none: no server), and connects to it.
     pub fn set_address(&self, address: Option<Address>) {
         let mut inner = self.shared.inner.lock();

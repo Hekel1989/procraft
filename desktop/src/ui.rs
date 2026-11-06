@@ -514,6 +514,15 @@ impl Interface {
         };
         let colour = srgb(self.colours.rgb());
         self.time_lapse.record(&ctx, session, input.idle());
+        // the Style Studio over everything
+        #[cfg(feature = "generation")]
+        if self.generation.studio_open() {
+            self.canvas_rect = Rect::NOTHING;
+            self.generation.studio(&ctx, &mut self.look, session);
+            session.set_backdrops(Vec::new());
+            self.popover_open = false;
+            return;
+        }
         // the brush studio over everything (the library stays open under it)
         if let Some(new) = self.library.studio.take() {
             self.studio.begin(&ctx, session, new);

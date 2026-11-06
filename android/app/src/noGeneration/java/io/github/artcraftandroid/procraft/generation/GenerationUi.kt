@@ -30,4 +30,7 @@ object GenerationUi {
     fun trayUp(): Boolean = false
 
     fun tuck() = Unit
+
+    @Composable
+    fun StyleStudio(vm: CanvasViewModel) = Unit
 }

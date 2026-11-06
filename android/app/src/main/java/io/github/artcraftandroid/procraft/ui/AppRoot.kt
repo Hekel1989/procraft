@@ -323,6 +323,7 @@ fun AppRoot(vm: CanvasViewModel) {
                 GuideEditor(vm)
                 LightingStudio(vm)
                 BrushStudio(vm)
+                io.github.artcraftandroid.procraft.generation.GenerationUi.StyleStudio(vm)
                 PadMenu(vm, maxWidth)
                 // a colour dragged out goes over everything
                 DropDot(vm)

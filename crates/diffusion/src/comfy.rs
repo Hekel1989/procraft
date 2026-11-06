@@ -189,6 +189,21 @@ impl Comfy {
         Ok(Some(text))
     }
 
+    /// Writes `text` as `path` in ComfyUI's user folder (`userdata`), over what's there.
+    pub fn put_user_file(&self, path: &str, text: &str) -> Result<(), Error> {
+        let url = self.address.http(&format!("/userdata/{}?overwrite=true", encode_path(path)));
+        let answer = self
+            .agent
+            .post(url)
+            .header("Content-Type", "application/octet-stream")
+            .send(text.as_bytes())
+            .map_err(|e| self.unreachable(e))?;
+        if !answer.status().is_success() {
+            return Err(Error::Server { message: format!("its user folder answered {}", answer.status()) });
+        }
+        Ok(())
+    }
+
     fn get(&self, path: &str) -> Result<Value, Error> {
         let answer = self.agent.get(self.address.http(path)).call().map_err(|e| self.unreachable(e))?;
         read_json(answer)

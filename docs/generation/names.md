@@ -56,7 +56,7 @@ when something gets a name, and change it here first when a name changes.
 | **Preview prompt** | The prompt the Studio's Try it uses, typed by the user. | — |
 | **Try it** | The Studio's button that makes one small preview picture with the style as it is. | "Try it" |
 | **Tries** | The Studio's last four Try it pictures, as thumbnails under the big one, to compare a change with the one before. Kept until the Studio closes. | — |
-| **Plus card** | The "+" card at the end of the style strip: New from the chosen style, Import a style. | "+", "New from \"Anima\"", "Import a style…" |
+| **Plus card** | The "+" card at the end of the style strip: a new style, opened in the Studio. | "+", "New style" |
 | **Styles folder** | The folder a person can open where styles are kept as `.toml` files: Documents › ProCraft Diffusion › Styles on Android, the app's data folder on the desktop. Changed in a setting. | "Styles folder", "Open styles folder" |
 
 ## Settings and set-up

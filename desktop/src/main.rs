@@ -36,6 +36,8 @@ mod gallery;
 #[cfg(feature = "generation")]
 mod generation;
 #[cfg(feature = "generation")]
+mod generation_studio;
+#[cfg(feature = "generation")]
 mod generation_styles;
 #[cfg(feature = "generation")]
 mod generation_tags;

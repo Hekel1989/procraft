@@ -30,6 +30,8 @@ mod gallery;
 #[cfg(feature = "generation")]
 mod generation;
 #[cfg(feature = "generation")]
+mod generation_studio;
+#[cfg(feature = "generation")]
 mod generation_styles;
 #[cfg(feature = "generation")]
 mod generation_tags;
@@ -123,6 +125,8 @@ pub use generation::{
     GenerationMode, GenerationResolution, GenerationSettings, GenerationState, ResultInfo, RunInfo, RunSettings,
     SelectionInfo, ServerConnection, ServerStatus, SizeInfo, generation_address,
 };
+#[cfg(feature = "generation")]
+pub use generation_studio::{LoraSetting, ServerLists, StudioPicture, StudioState, StyleEdit};
 #[cfg(feature = "generation")]
 pub use generation_styles::{StyleFileText, StyleInfo, StyleKind};
 #[cfg(feature = "generation")]

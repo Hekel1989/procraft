@@ -66,6 +66,39 @@ impl StylesFolder {
     }
 }
 
+/// Opens the styles folder in the system's file manager.
+pub fn open_styles_folder() {
+    let dir = styles_dir();
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        log::warn!("the styles folder {} couldn't be made: {e}", dir.display());
+    }
+    let opener = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    if let Err(e) = std::process::Command::new(opener).arg(&dir).spawn() {
+        log::warn!("the styles folder couldn't be opened with {opener}: {e}");
+    }
+}
+
+/// What happened in the strip of style cards.
+pub enum StripAction {
+    /// A card was tapped.
+    Pick(String),
+    /// A card was held or right-clicked: its menu, under it.
+    Hold(String, Rect),
+    /// The + card was tapped: a new style.
+    Plus,
+}
+
+/// How long a card is held, in seconds, before its menu shows.
+const HOLD: f64 = 0.5;
+/// The + card's width.
+const PLUS_WIDTH: f32 = 56.0;
+
 /// A family's badge colours: its ink and its pill's fill.
 fn badge_colours(family: &str) -> (Themed, Themed) {
     if family == "Anima" {
@@ -77,8 +110,8 @@ fn badge_colours(family: &str) -> (Themed, Themed) {
 }
 
 /// The strip of style cards at `at`, `width` across, scrolling sideways when they don't fit; the
-/// chosen one ringed. Returns the style clicked, if one was.
-pub fn strip(ui: &mut Ui, at: egui::Pos2, width: f32, styles: &[StyleInfo], chosen: &str) -> Option<String> {
+/// chosen one ringed, the + card at the end. Returns what happened, if anything.
+pub fn strip(ui: &mut Ui, at: egui::Pos2, width: f32, styles: &[StyleInfo], chosen: &str) -> Option<StripAction> {
     let row = Rect::from_min_size(at, vec2(width, CARD_HEIGHT));
     let mut row_ui =
         ui.new_child(UiBuilder::new().max_rect(row).layout(egui::Layout::left_to_right(egui::Align::Center)));
@@ -92,9 +125,23 @@ pub fn strip(ui: &mut Ui, at: egui::Pos2, width: f32, styles: &[StyleInfo], chos
             for s in styles {
                 let (card, response) = ui.allocate_exact_size(vec2(CARD_WIDTH, CARD_HEIGHT), Sense::click());
                 card_at(ui, card, s, s.id == chosen);
-                if response.clicked() {
-                    clicked = Some(s.id.clone());
+                // held (half a second) or right-clicked: its menu
+                let held = response.is_pointer_button_down_on()
+                    && ui.input(|i| i.pointer.press_start_time().is_some_and(|t| i.time - t > HOLD));
+                if response.is_pointer_button_down_on() && !held {
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
                 }
+                if held || response.secondary_clicked() || response.long_touched() {
+                    clicked = Some(StripAction::Hold(s.id.clone(), card));
+                } else if response.clicked() {
+                    clicked = Some(StripAction::Pick(s.id.clone()));
+                }
+            }
+            let (plus, response) = ui.allocate_exact_size(vec2(PLUS_WIDTH, CARD_HEIGHT), Sense::click());
+            ui.painter().rect_filled(plus, 12.0, argb(CARD));
+            text(ui.painter(), plus.center(), Align2::CENTER_CENTER, "+", 26.0, Weight::Regular, argb(DIM));
+            if response.on_hover_text("New style").clicked() {
+                clicked = Some(StripAction::Plus);
             }
         });
     clicked
@@ -158,7 +205,7 @@ mod tests {
     }
 
     /// The strip drawn once at the window's corner, with `events`; the style clicked, if any.
-    fn frame(ctx: &egui::Context, styles: &[StyleInfo], events: Vec<egui::Event>) -> Option<String> {
+    fn frame(ctx: &egui::Context, styles: &[StyleInfo], events: Vec<egui::Event>) -> Option<StripAction> {
         let input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))),
             events,
@@ -189,6 +236,7 @@ mod tests {
         };
         frame(&ctx, &styles, vec![egui::Event::PointerMoved(p)]);
         frame(&ctx, &styles, vec![button(true)]);
-        assert_eq!(frame(&ctx, &styles, vec![button(false)]).as_deref(), Some("b"));
+        let clicked = frame(&ctx, &styles, vec![button(false)]);
+        assert!(matches!(clicked, Some(StripAction::Pick(id)) if id == "b"));
     }
 }

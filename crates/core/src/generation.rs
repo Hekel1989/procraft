@@ -507,6 +507,8 @@ pub struct Generation {
     pub(crate) worker: Worker,
     /// The person's styles folder, as the app last read it.
     pub(crate) style_files: Mutex<Vec<procraft_diffusion::StyleFile>>,
+    /// The Style Studio's Try it run and its last picture.
+    pub(crate) studio: Mutex<crate::generation_studio::StudioRun>,
     pub(crate) settings: Mutex<GenerationSettings>,
     artwork: Mutex<Artwork>,
     /// What finished loads report to; [`Generation::state`] takes them in when ready.
@@ -535,6 +537,7 @@ impl Generation {
         let generation = Generation {
             worker: Worker::new(),
             style_files: Mutex::default(),
+            studio: Mutex::default(),
             settings: Mutex::new(settings.clone()),
             artwork: Mutex::default(),
             loaded: Mutex::new(loaded),
@@ -1084,8 +1087,13 @@ impl Generation {
 }
 
 impl Generation {
+    /// Whether a run on the canvas is going (Try it waits behind it).
+    pub(crate) fn canvas_running(&self) -> bool {
+        self.artwork.lock().running.is_some()
+    }
+
     /// The largest picture in force: the setting, else the server's GPU memory.
-    fn largest_megapixels(&self, server: &procraft_diffusion::ServerState) -> f32 {
+    pub(crate) fn largest_megapixels(&self, server: &procraft_diffusion::ServerState) -> f32 {
         let setting = self.settings.lock().largest_megapixels;
         setting.filter(|mp| mp.is_finite() && *mp > 0.0).unwrap_or_else(|| {
             let vram = server.stats.as_ref().and_then(|s| s.gpu.as_ref()).map_or(0, |(_, bytes)| *bytes);
@@ -1701,7 +1709,7 @@ fn guess_mode(mask: &Mask, picture: &Picture, canvas: (u32, u32)) -> GenerationM
     if edge && clear * 2 > selected { GenerationMode::Expand } else { GenerationMode::Fill }
 }
 
-fn random_seed() -> u64 {
+pub(crate) fn random_seed() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64 % 1_000_000_000_000).unwrap_or(0)
 }
 
@@ -1760,7 +1768,7 @@ fn thumbnail(picture: &Picture) -> Option<ThumbnailImage> {
     Some(ThumbnailImage { width: small.width, height: small.height, rgba })
 }
 
-fn premultiply(rgba: &mut [u8]) {
+pub(crate) fn premultiply(rgba: &mut [u8]) {
     for px in rgba.as_chunks_mut::<4>().0 {
         let a = u16::from(px[3]);
         for c in px.iter_mut().take(3) {
