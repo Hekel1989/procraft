@@ -780,9 +780,13 @@ bytes. `install --dry-run` prints every step and command. A fresh install marks 
 mark goes when `companion.json` is written. `check` on a folder notes a missing `companion.json`
 rather than failing, and judges readiness by the features. Ctrl+C reaches ComfyUI through two small
 platform calls (the companion's only `unsafe`). **Windows is written to the same plan but untested**:
-there's no Windows machine here; it waits for someone to try it and report. Still to do for
-acceptance: a real `install` and `models anima` into an empty folder, then `start` and the app's
-check against it.
+there's no Windows machine here; it waits for someone to try it and report.
+
+*Accepted on Linux (2026-11-06):* into an empty folder on this machine's data drive, `install`
+took 2 min 43 s (17 GB, the NVIDIA build found by itself) and `models anima`, after the licence
+question, brought the six files (26 GB in all). `start --port 8190` came up with the three add-ons
+loaded, both checks (the companion's and `diffusion-cli check`, the app's) reported every feature
+ready, a 1024 × 1024 Anima picture took 13 s from cold, and `stop` stopped it.
 
 ---
 
@@ -807,7 +811,7 @@ check against it.
 | **M3 Selections** | selection graphs + modes; mode guess; Selection toolbar button; tuning grow/blur/colour match on real pictures |
 | **M4 Control layers + autocomplete** | engine `control` property; layer menu row + badge; popover rows; control image preparation; tag files, index, suggestion strip, recent prompts |
 | **Results tray** ✅ (2026-11-06, before M5) | §A4 on both apps: tucking (⌄, a tap on the canvas, Esc) and the tray tab; the tray as an open panel for the canvas's touches; ↻ icon; ··· with "Use the seed" and "Clear all results…"; the note line; tested on the tablet (tap out, drag out, tab, run while tucked, other tools' bars) and on desktop |
-| **M5 Companion** | `procraft-companion` install / models / check / start / stop; model list with hashes; Windows written but untested (no Windows machine; reports welcome when released); rebuild the dev instance with it |
+| **M5 Companion** ✅ (2026-11-06, Linux) | `procraft-companion` install / models / check / start / stop; model list with hashes; a fresh install accepted on Linux (Part C); Windows written but untested (no Windows machine; reports welcome when released) |
 
 ### M2 as delivered (2026-11-05)
 
