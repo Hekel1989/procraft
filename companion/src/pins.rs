@@ -1,9 +1,5 @@
 //! Every version, address and file the companion pins, in one place. `check` compares an installed
 //! folder against these; `install` and `models` use them to download what is missing.
-//!
-//! Some of the data here is for `install`, `start` and `stop`, which are only stubs so far.
-
-#![allow(dead_code)]
 
 /// The uv version the companion installs.
 pub const UV_VERSION: &str = "0.12.1";

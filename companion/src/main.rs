@@ -1,7 +1,7 @@
 //! The ProCraft Diffusion companion: sets up a ComfyUI server for the app and checks it.
 //!
 //! ```text
-//! procraft-companion install [--dir DIR] [--gpu nvidia|amd|intel|cpu]
+//! procraft-companion install [--dir DIR] [--gpu nvidia|amd|intel|cpu] [--dry-run]
 //! procraft-companion models anima [--dir DIR] [--accept-licence]
 //! procraft-companion check [DIR | URL] [--verify]
 //! procraft-companion start [--dir DIR] [--port 8189] [--lan]
@@ -10,9 +10,11 @@
 
 mod check;
 mod download;
+mod install;
 mod installed;
 mod models;
 mod pins;
+mod server;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -38,6 +40,9 @@ enum Command {
         /// The GPU's PyTorch build (default: detected).
         #[arg(long, value_enum)]
         gpu: Option<Gpu>,
+        /// Print what it would do, without downloading or writing anything.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Downloads model files into an installed folder.
     Models {
@@ -97,9 +102,14 @@ fn main() -> ExitCode {
 
 fn run() -> Result<ExitCode, String> {
     match Cli::parse().command {
-        Command::Install { dir: _, gpu: _ } | Command::Start { dir: _, port: _, lan: _ } | Command::Stop { dir: _ } => {
-            eprintln!("not built yet");
-            Ok(ExitCode::from(2))
+        Command::Install { dir, gpu, dry_run } => {
+            install::run(&dir_or_default(dir)?, gpu, dry_run)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Start { dir, port, lan } => server::start(&dir_or_default(dir)?, port, lan),
+        Command::Stop { dir } => {
+            server::stop(&dir_or_default(dir)?)?;
+            Ok(ExitCode::SUCCESS)
         }
         Command::Models { model: Model::Anima { dir, accept_licence } } => {
             models::anima(&dir_or_default(dir)?, accept_licence)?;

@@ -102,6 +102,65 @@ pub fn download(url: &str, dest: &Path, size: u64, sha256: &str) -> Result<(), S
     Ok(())
 }
 
+/// Downloads `url` to `dest` without a size or hash to check: for archives whose pins don't include
+/// one. Bytes wait in `<file>.part` and are renamed into place once the transfer finishes.
+pub fn download_unverified(url: &str, dest: &Path) -> Result<(), String> {
+    let name = file_name(dest);
+    if dest.is_file() {
+        eprintln!("{name}: already there");
+        return Ok(());
+    }
+
+    let part = part_path(dest);
+    let mut offset = fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+    let agent = ureq::Agent::config_builder().http_status_as_error(false).build().new_agent();
+    let mut request = agent.get(url).header("Accept-Encoding", "identity");
+    if offset > 0 {
+        request = request.header("Range", &format!("bytes={offset}-"));
+    }
+    let mut response = request.call().map_err(|e| format!("{url}: {e}"))?;
+    let status = response.status().as_u16();
+    let mut file = match status {
+        206 if offset > 0 => {
+            OpenOptions::new().append(true).open(&part).map_err(|e| format!("{}: {e}", part.display()))?
+        }
+        200 => {
+            // a fresh download, or the server ignored the Range and sent everything again
+            offset = 0;
+            File::create(&part).map_err(|e| format!("{}: {e}", part.display()))?
+        }
+        416 if offset > 0 => {
+            // the part may already hold the whole archive, but there is no hash to tell; start over
+            remove(&part)?;
+            return Err(format!("{url}: the partial download is unusable, run install again"));
+        }
+        _ => return Err(format!("{url}: HTTP {status}")),
+    };
+
+    let mut done = offset;
+    let mut buffer = vec![0u8; CHUNK];
+    let mut reader = response.body_mut().as_reader();
+    loop {
+        let read = reader.read(&mut buffer).map_err(|e| format!("{url}: {e}"))?;
+        if read == 0 {
+            break;
+        }
+        let Some(chunk) = buffer.get(..read) else { return Err("read past the buffer".to_owned()) };
+        file.write_all(chunk).map_err(|e| format!("{}: {e}", part.display()))?;
+        done += read as u64;
+    }
+    file.flush().map_err(|e| format!("{}: {e}", part.display()))?;
+    drop(file);
+
+    if done == 0 {
+        remove(&part)?;
+        return Err(format!("{name}: the download was empty"));
+    }
+    place(&part, dest)?;
+    eprintln!("{name}: downloaded ({done} bytes)");
+    Ok(())
+}
+
 /// The SHA-256 of `path`, in lowercase hex.
 pub fn sha256_file(path: &Path) -> Result<String, String> {
     let mut hasher = Sha256::new();
@@ -313,6 +372,37 @@ mod tests {
         assert!(!dest.exists());
         assert!(!part_path(&dest).exists());
         server.join();
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_unverified_download_lands_through_a_part_file() {
+        let body = b"an archive with no pinned hash".to_vec();
+        let server = Server::serve(body.clone(), true);
+        let dir = temp_dir();
+        let dest = dir.join("archive.tar.gz");
+
+        download_unverified(&server.url(), &dest).unwrap();
+
+        assert_eq!(fs::read(&dest).unwrap(), body);
+        assert!(!part_path(&dest).exists());
+        assert!(!server.join());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_unverified_part_file_resumes_with_a_range() {
+        let body = b"the rest of an archive".to_vec();
+        let server = Server::serve(body.clone(), true);
+        let dir = temp_dir();
+        let dest = dir.join("archive.tar.gz");
+        fs::write(part_path(&dest), &body[..10]).unwrap();
+
+        download_unverified(&server.url(), &dest).unwrap();
+
+        assert_eq!(fs::read(&dest).unwrap(), body);
+        assert!(!part_path(&dest).exists());
+        assert!(server.join());
         let _ = fs::remove_dir_all(dir);
     }
 
