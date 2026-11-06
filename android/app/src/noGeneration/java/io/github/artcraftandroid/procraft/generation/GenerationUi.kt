@@ -25,5 +25,9 @@ object GenerationUi {
     fun Panel(vm: CanvasViewModel, arrowX: Dp, modifier: Modifier) = Unit
 
     @Composable
-    fun ResultsBar(vm: CanvasViewModel, modifier: Modifier) = Unit
+    fun ResultsTray(vm: CanvasViewModel, modifier: Modifier) = Unit
+
+    fun trayUp(): Boolean = false
+
+    fun tuck() = Unit
 }

@@ -52,8 +52,23 @@ const TRACE: Icon = Icon {
     ],
 };
 
+/// Again: a round arrow coming back on itself (24-unit grid).
+const AGAIN: Icon = Icon {
+    name: "again",
+    width: 24.0,
+    height: 24.0,
+    parts: &[
+        Part { d: "M18.6 9.6A7 7 0 1 1 12 5", stroke: 2.4, fill: false, even_odd: false },
+        Part { d: "M11 1.6L16.4 5L11 8.4Z", stroke: 0.0, fill: true, even_odd: false },
+    ],
+};
+
 /// The Control part's + Line art / + Scribble row.
 const ADD_ROW: f32 = 40.0;
+/// The results tray's round buttons (↻, ···, ⌄), across.
+const ROUND: f32 = 40.0;
+/// The tray tab's height.
+const TAB_HEIGHT: f32 = 42.0;
 
 const WIDTH: f32 = 400.0;
 const PAD: f32 = 16.0;
@@ -66,6 +81,8 @@ const DIM: Themed = Themed(0x99FFFFFF, 0x99000000);
 const TRACK: Themed = Themed(0xFF414141, 0xFFBEBEBE);
 const KNOB: Themed = Themed(0xFFEDEDED, 0xFF3D3D3D);
 const BAR_FILL: Themed = Themed(0xF0202020, 0xF7F1F1F1);
+const MENU_FILL: Themed = Themed(0xF7313135, 0xF7FAFAFA);
+const MENU_LINE: Themed = Themed(0x1FFFFFFF, 0x1F000000);
 const OK: u32 = 0xFF3CCF6E;
 const WARN: u32 = 0xFFF2B440;
 const BAD: u32 = 0xFFE84F51;
@@ -131,6 +148,13 @@ pub struct GenerationUi {
     back: usize,
     /// The result held down (or right-clicked), showing its Delete above it.
     deleting: Option<u64>,
+    /// The results tray is up (else tucked into its tab); its ··· menu is open; "Clear all
+    /// results…" is being asked; a run was going at the last look (its first picture brings the
+    /// tray up).
+    tray_up: bool,
+    tray_menu: bool,
+    clear_alert: crate::alert::Alert,
+    was_running: bool,
     /// The last run's settings, for Again.
     last: Option<RunSettings>,
     /// The control layers the popover lists, their pictures, and the step each was given while the
@@ -189,6 +213,10 @@ impl GenerationUi {
             preview: None,
             back: 0,
             deleting: None,
+            tray_up: false,
+            tray_menu: false,
+            clear_alert: crate::alert::Alert::default(),
+            was_running: false,
             last: None,
             controls: Vec::new(),
             control_signature: Vec::new(),
@@ -199,7 +227,17 @@ impl GenerationUi {
 
     /// Looks at the run and the server again; asks for frames while something is under way.
     pub fn poll(&mut self, ctx: &egui::Context) {
+        let newest = self.state.results.last().map(|r| r.id);
+        let failed = self.state.error.is_some();
         self.state = self.generation.state();
+        // a run's first picture, or its failure, brings the tray up (results read back from the
+        // artwork's folder don't)
+        if self.was_running
+            && (self.state.results.last().map(|r| r.id) != newest || (self.state.error.is_some() && !failed))
+        {
+            self.tray_up = true;
+        }
+        self.was_running = self.state.running.is_some();
         if self.state.made_layer.is_some() {
             // a trace landed in a control layer: the popover reads the layers again next frame
             self.control_signature.clear();
@@ -252,7 +290,7 @@ impl GenerationUi {
         self.state.running.as_ref().map(|r| r.progress)
     }
 
-    /// Whether the results bar has anything to show.
+    /// Whether the results tray has anything to show.
     pub fn has_results(&self) -> bool {
         self.state.running.is_some() || !self.state.results.is_empty() || self.state.error.is_some()
     }
@@ -261,12 +299,27 @@ impl GenerationUi {
     pub fn leave(&mut self, session: &CanvasSession) {
         self.generation.leave(session);
         self.state = GenerationState::default();
+        self.tuck();
+        self.was_running = false;
     }
 
     /// The artwork `session` lives in `folder`: its kept results come back, read on a thread of
-    /// their own.
-    pub fn set_folder(&self, session: &CanvasSession, folder: String) {
+    /// their own, with the tray tucked into its tab.
+    pub fn set_folder(&mut self, session: &CanvasSession, folder: String) {
         self.generation.set_folder(session, folder);
+        self.tuck();
+    }
+
+    /// The results tray is up: the canvas takes a press on it as one outside an open panel.
+    pub fn tray_up(&self) -> bool {
+        self.tray_up && self.has_results()
+    }
+
+    /// Tucks the results tray into its tab (a tap on the canvas, Esc, ⌄).
+    pub fn tuck(&mut self) {
+        self.tray_up = false;
+        self.tray_menu = false;
+        self.deleting = None;
     }
 
     /// Opens the server view (from the Prefs tab).
@@ -456,7 +509,17 @@ impl GenerationUi {
             .hint_text("Describe it, or type tags…")
             .desired_width(inner.width())
             .desired_rows(3);
+        // a click on the suggestion strip keeps the field focused, so the strip is still there to take it
+        let on_strip = ui
+            .ctx()
+            .pointer_hover_pos()
+            .is_some_and(|p| crate::generation_tags::strip_rect(pos2(left, y + 90.0), right - left).contains(p));
+        let surrender = ui.ctx().options(|o| o.input_options.surrender_focus_on);
+        if on_strip {
+            ui.ctx().options_mut(|o| o.input_options.surrender_focus_on = egui::SurrenderFocusOn::Never);
+        }
         let output = edit.show(&mut ui.new_child(UiBuilder::new().max_rect(inner)));
+        ui.ctx().options_mut(|o| o.input_options.surrender_focus_on = surrender);
         let focused = output.response.has_focus();
         if let Some(range) = output.cursor_range {
             self.prompt_caret = crate::generation_tags::char_to_byte(&self.prompt, range.primary.index.0);
@@ -1051,15 +1114,33 @@ impl GenerationUi {
         }
     }
 
-    /// The bar at the foot of the window: the results, the run going, Again and Apply.
-    pub fn results_bar(
+    /// The results tray at the foot of the window (the results, the run going, ↻, Apply, ··· and
+    /// ⌄), or, tucked, its tab. Esc tucks it when no popover is open (`popover_open`).
+    pub fn results_tray(
         &mut self,
         ctx: &egui::Context,
         look: &mut Look,
         session: &CanvasSession,
         backdrops: &mut Vec<f32>,
+        popover_open: bool,
     ) -> Option<Asked> {
+        if let Some(crate::alert::Answer::Action) = self.clear_alert.show(ctx, look) {
+            self.generation.discard_results(session);
+            self.tuck();
+        }
         if !self.has_results() {
+            self.tuck();
+            return None;
+        }
+        if self.tray_up && !popover_open && !self.clear_alert.is_open() && crate::ui::escape(ctx) {
+            if self.tray_menu {
+                self.tray_menu = false;
+            } else {
+                self.tuck();
+            }
+        }
+        if !self.tray_up {
+            self.tray_tab(ctx, look, backdrops);
             return None;
         }
         let screen = ctx.content_rect();
@@ -1069,7 +1150,13 @@ impl GenerationUi {
             vec2(width, 96.0),
         );
         let mut asked = None;
-        egui::Area::new(Id::unique("generate results")).fixed_pos(rect.min).order(Order::Foreground).show(ctx, |ui| {
+        let mut more = None;
+        let mut tucked = false;
+        // a Delete showing sticks out above the bar: the area starts above it too, so the pointer
+        // over it is over the bar, not the canvas (an area reaches right and down from its corner)
+        let reach = if self.deleting.is_some() { 56.0 } else { 0.0 };
+        let corner = pos2(rect.left(), rect.top() - reach);
+        egui::Area::new(Id::unique("generate results")).fixed_pos(corner).order(Order::Foreground).show(ctx, |ui| {
             ui.allocate_rect(rect, Sense::click());
             panel::floating_frame(ui, look, "generate results frame", rect, backdrops);
             ui.painter().rect_filled(rect, 22.0, argb(BAR_FILL));
@@ -1147,6 +1234,7 @@ impl GenerationUi {
                 }
                 if self.deleting == Some(r.id) {
                     let bubble = Rect::from_center_size(pos2(cell.center().x, cell.top() - 34.0), vec2(76.0, 32.0));
+                    ui.allocate_rect(bubble, Sense::hover());
                     ui.painter().rect_filled(bubble, 10.0, argb(BAD));
                     text(
                         ui.painter(),
@@ -1231,14 +1319,21 @@ impl GenerationUi {
                     argb(DIM),
                 );
             }
-            // the buttons from the right: ✕, Apply, Again, the seed
+            // the buttons from the right: ⌄ (tuck), ··· (more), Apply, ↻ (again)
             let mut bx = rect.right() - 16.0;
-            let close = Rect::from_min_max(pos2(bx - 30.0, cy - 15.0), pos2(bx, cy + 15.0));
-            text(ui.painter(), close.center(), Align2::CENTER_CENTER, "×", 24.0, Weight::Regular, argb(DIM));
-            if ui.interact(close, ui.scope_id().with("discard"), Sense::click()).clicked() {
-                self.generation.discard_results(session);
+            let tuck = Rect::from_center_size(pos2(bx - ROUND / 2.0, cy), vec2(ROUND, ROUND));
+            tucked = round_button(ui, tuck, "tuck");
+            chevron(ui.painter(), tuck.center(), false, argb(INK));
+            bx = tuck.left() - 10.0;
+            let dots = Rect::from_center_size(pos2(bx - ROUND / 2.0, cy), vec2(ROUND, ROUND));
+            if round_button(ui, dots, "more") {
+                self.tray_menu = !self.tray_menu;
             }
-            bx = close.left() - 12.0;
+            for d in [-7.0, 0.0, 7.0] {
+                ui.painter().circle_filled(dots.center() + vec2(d, 0.0), 2.4, argb(INK));
+            }
+            more = Some(dots);
+            bx = dots.left() - 10.0;
             let target = shown.or(self.state.results.last().map(|r| r.id));
             if pill(ui, &mut bx, cy, "Apply", true, target.is_some())
                 && let Some(id) = target
@@ -1248,31 +1343,152 @@ impl GenerationUi {
                     None => asked = Some(Asked::Notice("No room for another layer".to_owned(), true)),
                 }
             }
-            let again = self.last.is_some() && self.state.running.is_none();
-            if pill(ui, &mut bx, cy, "Again", false, again)
+            let again_ready = self.last.is_some() && self.state.running.is_none();
+            let again = Rect::from_center_size(pos2(bx - ROUND / 2.0, cy), vec2(ROUND, ROUND));
+            if round_button(ui, again, "again")
+                && again_ready
                 && let Some(last) = self.last.clone()
                 && let Err(e) = self.generation.generate(session, last)
             {
                 asked = Some(Asked::Notice(e.to_string(), true));
             }
-            if let Some(r) = target.and_then(|id| self.state.results.iter().find(|r| r.id == id)) {
-                let words = format!("seed {}", r.seed);
-                let w = text_width(ui.painter(), &words, 12.0, Weight::Regular) + 20.0;
-                let tag = Rect::from_min_max(pos2(bx - w, cy - 15.0), pos2(bx, cy + 15.0));
-                ui.painter().rect_filled(tag, 10.0, argb(ROW));
-                text(ui.painter(), tag.center(), Align2::CENTER_CENTER, &words, 12.0, Weight::Regular, argb(DIM));
-                if ui.interact(tag, ui.scope_id().with("seed tag"), Sense::click()).clicked() {
-                    self.seed = Some(r.seed);
-                    self.seed_text = r.seed.to_string();
-                }
-            }
+            let ink = argb(INK).gamma_multiply(if again_ready { 1.0 } else { 0.4 });
+            look.icon(ui, &AGAIN, again.center(), 22.0, ink);
             if let Some(error) = &self.state.error {
                 let at = pos2(x + 4.0, cy);
                 text(ui.painter(), at, Align2::LEFT_CENTER, &shorten(error, 48), 12.0, Weight::Regular, argb(WARN));
             }
         });
+        if tucked {
+            self.tuck();
+        } else if self.tray_menu
+            && let Some(dots) = more
+        {
+            self.tray_menu_show(ctx, rect, dots);
+        }
         asked
     }
+
+    /// The tray's ··· menu over its button `dots`: "Use the seed" of the result shown (or the
+    /// newest), and "Clear all results…", which asks first. A press elsewhere closes it.
+    fn tray_menu_show(&mut self, ctx: &egui::Context, tray: Rect, dots: Rect) {
+        let menu = Rect::from_min_size(pos2(dots.right() - 240.0, tray.top() - 10.0 - 96.0), vec2(240.0, 96.0));
+        let target = self.state.shown.or(self.state.results.last().map(|r| r.id));
+        let seed = target.and_then(|id| self.state.results.iter().find(|r| r.id == id)).map(|r| r.seed);
+        egui::Area::new(Id::unique("results tray menu")).fixed_pos(menu.min).order(Order::Foreground).show(ctx, |ui| {
+            ui.allocate_rect(menu, Sense::click());
+            ui.painter().rect_filled(menu, 14.0, argb(MENU_FILL));
+            let first = Rect::from_min_size(menu.min, vec2(menu.width(), 48.0));
+            let second = Rect::from_min_size(pos2(menu.left(), menu.top() + 48.0), vec2(menu.width(), 48.0));
+            ui.painter().line_segment(
+                [pos2(menu.left(), second.top()), pos2(menu.right(), second.top())],
+                egui::Stroke::new(1.0, argb(MENU_LINE)),
+            );
+            let words = seed.map_or_else(|| "Use the seed".to_owned(), |s| format!("Use the seed {s}"));
+            let ink = argb(INK).gamma_multiply(if seed.is_some() { 1.0 } else { 0.4 });
+            text(
+                ui.painter(),
+                pos2(first.left() + 16.0, first.center().y),
+                Align2::LEFT_CENTER,
+                &words,
+                15.0,
+                Weight::Regular,
+                ink,
+            );
+            if ui.interact(first, ui.scope_id().with("use the seed"), Sense::click()).clicked()
+                && let Some(s) = seed
+            {
+                self.seed = Some(s);
+                self.seed_text = s.to_string();
+                self.tray_menu = false;
+            }
+            let at = pos2(second.left() + 16.0, second.center().y);
+            text(
+                ui.painter(),
+                at,
+                Align2::LEFT_CENTER,
+                "Clear all results…",
+                15.0,
+                Weight::Regular,
+                Color32::from_rgb(0xE8, 0x4F, 0x51),
+            );
+            if ui.interact(second, ui.scope_id().with("clear all results"), Sense::click()).clicked() {
+                let n = self.state.results.len();
+                let title = if n == 1 { "Clear the result?".to_owned() } else { format!("Clear all {n} results?") };
+                self.clear_alert.open(&title, "They can't be brought back.", "Clear", None);
+                self.tray_menu = false;
+            }
+        });
+        let pressed_outside = ctx.input(|i| {
+            i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !menu.contains(p) && !dots.contains(p))
+        });
+        if pressed_outside {
+            self.tray_menu = false;
+        }
+    }
+
+    /// The tray tucked away: its tab at the bottom centre, the shown (or newest) result and how
+    /// many, or the run going; tapped, the tray comes up. None with no results and no run.
+    fn tray_tab(&mut self, ctx: &egui::Context, look: &mut Look, backdrops: &mut Vec<f32>) {
+        let running = self.state.running.as_ref();
+        if self.state.results.is_empty() && running.is_none() {
+            return;
+        }
+        let words = match running {
+            Some(run) if run.extracting => format!("Tracing {}…", extract_name(run.extract_kind)),
+            Some(run) => format!("Generating · {:.0}%", run.progress * 100.0),
+            None => format!("Results · {}", self.state.results.len()),
+        };
+        let screen = ctx.content_rect();
+        let painter = ctx.layer_painter(egui::LayerId::new(Order::Foreground, Id::unique("tray tab measure")));
+        let width = 8.0 + 28.0 + 10.0 + text_width(&painter, &words, 14.5, Weight::Medium) + 12.0 + 14.0 + 16.0;
+        let rect = Rect::from_min_size(
+            pos2(screen.center().x - width / 2.0, screen.bottom() - 22.0 - TAB_HEIGHT),
+            vec2(width, TAB_HEIGHT),
+        );
+        let progress = running.map(|r| r.progress);
+        let picture =
+            self.state.shown.or(self.state.results.last().map(|r| r.id)).and_then(|id| self.thumbnails.get(&id));
+        let mut open = false;
+        egui::Area::new(Id::unique("results tray tab")).fixed_pos(rect.min).order(Order::Foreground).show(ctx, |ui| {
+            open = ui.allocate_rect(rect, Sense::click()).clicked();
+            panel::floating_frame(ui, look, "results tray tab frame", rect, backdrops);
+            ui.painter().rect_filled(rect, TAB_HEIGHT / 2.0, argb(BAR_FILL));
+            let cell = Rect::from_min_size(pos2(rect.left() + 8.0, rect.top() + 7.0), vec2(28.0, 28.0));
+            match (progress, picture) {
+                (Some(done), _) => ring(ui, cell.center(), 11.0, done),
+                (None, Some(t)) => {
+                    ui.painter().image(
+                        t.id(),
+                        fit(cell, t.size_vec2()),
+                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                }
+                (None, None) => {}
+            }
+            let at = pos2(cell.right() + 10.0, rect.center().y);
+            text(ui.painter(), at, Align2::LEFT_CENTER, &words, 14.5, Weight::Medium, argb(INK));
+            chevron(ui.painter(), pos2(rect.right() - 22.0, rect.center().y), true, argb(DIM));
+        });
+        if open {
+            self.tray_up = true;
+        }
+    }
+}
+
+/// One of the results tray's round buttons at `rect`, its glyph drawn after; whether it was tapped.
+fn round_button(ui: &Ui, rect: Rect, id: &str) -> bool {
+    ui.painter().circle_filled(rect.center(), rect.width() / 2.0, argb(ROW));
+    ui.interact(rect, ui.scope_id().with(("round", id)), Sense::click()).clicked()
+}
+
+/// A small chevron at `at`, pointing up or down.
+fn chevron(painter: &egui::Painter, at: egui::Pos2, up: bool, colour: Color32) {
+    let dy = if up { -3.5 } else { 3.5 };
+    let stroke = egui::Stroke::new(2.2, colour);
+    painter.line_segment([at + vec2(-7.0, -dy), at + vec2(0.0, dy)], stroke);
+    painter.line_segment([at + vec2(0.0, dy), at + vec2(7.0, -dy)], stroke);
 }
 
 /// A label over a part of the form.
@@ -1394,4 +1610,128 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
         }
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+    use super::*;
+    use procraft_core::{ResultInfo, ThumbnailImage};
+
+    /// One frame of the popover, under `button`, with `events`.
+    fn frame(ctx: &egui::Context, ui: &mut GenerationUi, look: &mut Look, s: &CanvasSession, events: Vec<egui::Event>) {
+        let mut input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 1000.0))),
+            events,
+            ..Default::default()
+        };
+        input.time = Some(ctx.input(|i| i.time) + 0.05);
+        let mut out = ctx.run_ui(input, |root| {
+            let ctx = root.ctx().clone();
+            let mut backdrops = Vec::new();
+            ui.popover(&ctx, look, s, Rect::from_min_size(pos2(600.0, 10.0), vec2(40.0, 40.0)), &mut backdrops);
+        });
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn a_click_on_a_suggestion_completes_the_tag() {
+        let ctx = egui::Context::default();
+        let mut look = Look::default();
+        let session = CanvasSession::new(400, 300);
+        let settings = GenerationSettings { address: "127.0.0.1:1".into(), nsfw: false, largest_megapixels: None };
+        let mut ui = GenerationUi::new(settings, GenerationResolution::Normal);
+        ui.server.connection = ServerConnection::Connected;
+        ui.prompt = "light".into();
+        ui.prompt_caret = 5;
+        frame(&ctx, &mut ui, &mut look, &session, vec![]);
+        let id = egui::Id::unique("generate prompt");
+        ctx.memory_mut(|m| m.request_focus(id));
+        frame(&ctx, &mut ui, &mut look, &session, vec![]);
+        // the first chip, under the field (its frame is the text's rect grown by 12 × 10)
+        let field = ctx.read_response(id).expect("the prompt field").rect;
+        let p = pos2(field.left() + 18.0, field.top() + 97.0);
+        let button = |pressed| egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        frame(&ctx, &mut ui, &mut look, &session, vec![egui::Event::PointerMoved(p)]);
+        frame(&ctx, &mut ui, &mut look, &session, vec![button(true)]);
+        frame(&ctx, &mut ui, &mut look, &session, vec![button(false)]);
+        assert_ne!(ui.prompt, "light", "the click completed the tag");
+        assert!(ctx.memory(|m| m.has_focus(id)), "the field is still being typed in");
+    }
+
+    /// One frame of the results tray alone, with `events`.
+    fn tray_frame(
+        ctx: &egui::Context,
+        ui: &mut GenerationUi,
+        look: &mut Look,
+        s: &CanvasSession,
+        events: Vec<egui::Event>,
+    ) {
+        let mut input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 1000.0))),
+            events,
+            ..Default::default()
+        };
+        input.time = Some(ctx.input(|i| i.time) + 0.05);
+        let mut out = ctx.run_ui(input, |root| {
+            let ctx = root.ctx().clone();
+            let mut backdrops = Vec::new();
+            ui.results_tray(&ctx, look, s, &mut backdrops, false);
+        });
+        out.textures_delta.clear();
+    }
+
+    /// A click at `p` (moved there first).
+    fn click(p: egui::Pos2) -> Vec<Vec<egui::Event>> {
+        let button = |pressed| egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        vec![vec![egui::Event::PointerMoved(p)], vec![button(true)], vec![button(false)], vec![]]
+    }
+
+    #[test]
+    fn the_tray_tucks_into_its_tab_and_the_tab_brings_it_back() {
+        let ctx = egui::Context::default();
+        let mut look = Look::default();
+        let session = CanvasSession::new(400, 300);
+        let settings = GenerationSettings { address: String::new(), nsfw: false, largest_megapixels: None };
+        let mut ui = GenerationUi::new(settings, GenerationResolution::Normal);
+        let thumbnail = ThumbnailImage { width: 2, height: 2, rgba: vec![255; 16] };
+        let result =
+            |id| ResultInfo { id, seed: 7, thumbnail: thumbnail.clone(), scaled_from_width: 0, scaled_from_height: 0 };
+        ui.state.results = vec![result(1), result(2)];
+        ui.tray_up = true;
+        tray_frame(&ctx, &mut ui, &mut look, &session, vec![]);
+        assert!(ui.tray_up());
+        // ⌄ at the tray's right end: 16 in from the edge of a 900-wide tray centred in 1400
+        let tray_right = 700.0 + 450.0;
+        for events in click(pos2(tray_right - 16.0 - ROUND / 2.0, 1000.0 - 22.0 - 48.0)) {
+            tray_frame(&ctx, &mut ui, &mut look, &session, events);
+        }
+        assert!(!ui.tray_up(), "⌄ tucked it");
+        // the tab, at the bottom centre
+        for events in click(pos2(700.0, 1000.0 - 22.0 - TAB_HEIGHT / 2.0)) {
+            tray_frame(&ctx, &mut ui, &mut look, &session, events);
+        }
+        assert!(ui.tray_up(), "the tab brought it back");
+        // Esc tucks it again, with no popover open
+        let esc = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        };
+        tray_frame(&ctx, &mut ui, &mut look, &session, vec![esc]);
+        assert!(!ui.tray_up(), "Esc tucked it");
+        assert_eq!(ui.state.results.len(), 2, "nothing was lost");
+    }
 }

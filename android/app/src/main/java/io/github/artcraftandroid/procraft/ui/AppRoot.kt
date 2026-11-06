@@ -205,9 +205,9 @@ fun AppRoot(vm: CanvasViewModel) {
                 }
                 // the colour panel dragged out by its grabber: a window over the canvas until closed
                 FloatingColors(vm, maxWidth, maxHeight)
-                // image generation's results, out of the way of the modes' own bars
+                // image generation's results tray, out of the way of the modes' own bars
                 if (!vm.transforming && !vm.selecting && vm.adjustment == null && !vm.barsHidden) {
-                    io.github.artcraftandroid.procraft.generation.GenerationUi.ResultsBar(vm, Modifier.align(Alignment.BottomCenter))
+                    io.github.artcraftandroid.procraft.generation.GenerationUi.ResultsTray(vm, Modifier.align(Alignment.BottomCenter))
                 }
                 // the bottom toolbars rise from below the screen, and drop away
                 androidx.compose.animation.AnimatedVisibility(

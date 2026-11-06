@@ -728,10 +728,11 @@ impl Interface {
         }
         #[cfg(not(feature = "generation"))]
         let _ = generate_selection;
-        // the results bar, out of the way of the modes' own bars
+        // the results tray, out of the way of the modes' own bars
         #[cfg(feature = "generation")]
         if !self.transform.on && !self.selection.on && session.adjustment_shown().adjustment.is_none() {
-            let asked = self.generation.results_bar(&ctx, &mut self.look, session, &mut backdrops);
+            let open = self.open.is_some();
+            let asked = self.generation.results_tray(&ctx, &mut self.look, session, &mut backdrops, open);
             if let Some(crate::generation::Asked::Notice(text, warning)) = asked {
                 self.overlays.notice(text, warning);
             }
@@ -817,8 +818,11 @@ impl Interface {
             let icon = if input.zooming_view() { egui::CursorIcon::ZoomIn } else { egui::CursorIcon::Grab };
             ctx.set_cursor_icon(icon);
         }
-        self.popover_open = self.open.is_some() || self.settings || self.text.editing();
-        self.panel_lets_through = self.open.is_some_and(|p| !self.modal(p)) && !self.settings && !self.text.editing();
+        // the results tray up counts as an open panel: a press on the canvas tucks it
+        let tray = self.tray_up();
+        self.popover_open = self.open.is_some() || self.settings || self.text.editing() || tray;
+        self.panel_lets_through =
+            (self.open.is_some_and(|p| !self.modal(p)) || tray) && !self.settings && !self.text.editing();
     }
 
     /// The touch companion, with its switch on in Advanced settings.
@@ -1160,7 +1164,14 @@ impl Interface {
                 TouchCommand::ShowBrushes => self.toggle(session, Popover::Brushes),
                 // a press on the canvas with a panel open: dragged or held, it goes on; a tap only
                 // closes the panel
-                TouchCommand::PanelFades | TouchCommand::PanelTapped => self.open = None,
+                TouchCommand::PanelFades | TouchCommand::PanelTapped => {
+                    // with no popover open, it was the results tray: it tucks away
+                    #[cfg(feature = "generation")]
+                    if self.open.is_none() {
+                        self.generation.tuck();
+                    }
+                    self.open = None;
+                }
                 // a stroke or a fill on a text layer: it takes them once rasterized
                 TouchCommand::TextLayer => self.text.ask_rasterize(),
                 // (the pen's hover, which sets the brush with a finger, isn't the desktop's)
@@ -2157,6 +2168,14 @@ impl Interface {
         if !modal {
             self.close_outside(ctx, shown, button);
         }
+    }
+
+    /// Image generation's results tray is up, with no popover open over it.
+    fn tray_up(&self) -> bool {
+        #[cfg(feature = "generation")]
+        return self.open.is_none() && self.generation.tray_up();
+        #[cfg(not(feature = "generation"))]
+        false
     }
 
     /// One of the menus of popover `which` is open.

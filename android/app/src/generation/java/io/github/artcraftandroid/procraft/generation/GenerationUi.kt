@@ -10,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -67,6 +68,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -137,6 +140,16 @@ object GenerationUi {
         }.build()
     }
 
+    /** Again: a round arrow coming back on itself (24-unit grid). */
+    private val AgainIcon: ImageVector by lazy {
+        ImageVector.Builder("again", 24.dp, 24.dp, 24f, 24f).apply {
+            path(fill = null, stroke = SolidColor(Color.White), strokeLineWidth = 2.4f, strokeLineCap = StrokeCap.Round) {
+                moveTo(18.6f, 9.6f); arcTo(7f, 7f, 0f, true, true, 12f, 5f)
+            }
+            path(fill = SolidColor(Color.White)) { moveTo(11f, 1.6f); lineTo(16.4f, 5f); lineTo(11f, 8.4f); close() }
+        }.build()
+    }
+
     private enum class View { FORM, SERVER }
 
     // the app's Generation, made with the settings kept, and the form's and bar's state
@@ -161,6 +174,12 @@ object GenerationUi {
     private val controlSteps = mutableStateMapOf<ULong, io.github.artcraftandroid.procraft.core.ControlStep>()
     // the result held down, showing its Delete
     private var deleting by mutableStateOf<ULong?>(null)
+    // the results tray is up (else tucked into its tab); its ··· menu is open; "Clear all results…"
+    // is being asked (how many); a run was going at the last look (its first picture brings the tray up)
+    private var trayUpState by mutableStateOf(false)
+    private var trayMenu by mutableStateOf(false)
+    private var clearing by mutableStateOf<Int?>(null)
+    private var wasRunning = false
     private var address by mutableStateOf("")
     private var state by mutableStateOf(GenerationState(null, emptyList(), null, null))
     private var server by mutableStateOf<ServerStatus?>(null)
@@ -199,7 +218,13 @@ object GenerationUi {
 
     /** Looks at the run and the server; makes bitmaps for new results. */
     private fun poll(g: Generation) {
+        val newest = state.results.lastOrNull()?.id
+        val failed = state.error != null
         state = g.state()
+        // a run's first picture, or its failure, brings the tray up (results read back from the
+        // artwork's folder don't)
+        if (wasRunning && (state.results.lastOrNull()?.id != newest || (state.error != null && !failed))) trayUpState = true
+        wasRunning = state.running != null
         // a trace landed in a control layer: the layers panel shows it
         if (state.madeLayer != null) refreshLayers?.invoke()
         server = g.server()
@@ -255,6 +280,17 @@ object GenerationUi {
     fun opened(session: CanvasSession, folder: String) {
         opened = session to folder
         generation?.setFolder(session, folder)
+        tuck()
+    }
+
+    /** The results tray is up: the canvas takes a touch on it as one outside an open panel. */
+    fun trayUp(): Boolean = trayUpState && hasResults()
+
+    /** Tucks the results tray into its tab (a tap on the canvas, ⌄). */
+    fun tuck() {
+        trayUpState = false
+        trayMenu = false
+        deleting = null
     }
 
     /** Traces the visible picture into control layer `layer`, on the server; errors show in the bar. */
@@ -279,6 +315,8 @@ object GenerationUi {
         val s = vm.session ?: return
         generation?.leave(s)
         state = GenerationState(null, emptyList(), null, null)
+        tuck()
+        wasRunning = false
     }
 
     /** The popover hanging from the Generate button. */
@@ -289,10 +327,12 @@ object GenerationUi {
         // above the keyboard while it's up: the form scrolls, Generate stays in view
         val ime = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
         val screen = LocalConfiguration.current.screenHeightDp.dp
-        // above the results bar too while it shows (96 tall, 22 above the screen's foot), not under it
+        // above the results tray too while it shows (96 tall, 22 above the screen's foot), or its
+        // tab (42), not under them
         val room = when {
             ime > 0.dp -> Modifier.heightIn(max = screen - Pc.BarHeight - ime - 12.dp)
-            hasResults() -> Modifier.heightIn(max = screen - Pc.BarHeight - 96.dp - 22.dp - 34.dp)
+            trayUp() -> Modifier.heightIn(max = screen - Pc.BarHeight - 96.dp - 22.dp - 34.dp)
+            hasResults() -> Modifier.heightIn(max = screen - Pc.BarHeight - 42.dp - 22.dp - 34.dp)
             else -> Modifier
         }
         Popover(400.dp, arrowX, modifier.then(room)) {
@@ -635,7 +675,9 @@ object GenerationUi {
         val suggestions = remember(promptField.text, caret, settings.nsfw) { g.suggestTags(promptField.text, caret.toUInt()) }
         val recent = if (prompt.isEmpty()) remember(prompt) { g.recentPrompts() } else emptyList()
         if (suggestions.isEmpty() && recent.isEmpty()) return
-        Row(Modifier.padding(top = 8.dp).horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        // a new word's chips start from the first
+        val scroll = remember(suggestions.firstOrNull()?.from, suggestions.firstOrNull()?.tag) { ScrollState(0) }
+        Row(Modifier.padding(top = 8.dp).horizontalScroll(scroll).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             suggestions.forEachIndexed { i, t ->
                 Row(
                     Modifier.height(32.dp).clip(RoundedCornerShape(10.dp)).background(RowFill)
@@ -706,16 +748,31 @@ object GenerationUi {
         }
     }
 
-    /** Whether the results bar has anything to show. */
+    /** Whether the results tray has anything to show. */
     private fun hasResults() = state.running != null || state.results.isNotEmpty() || state.error != null
 
-    /** The bar at the foot of the screen: the results, the run going, Again and Apply. */
+    /**
+     * The results tray at the foot of the screen (the results, the run going, ↻, Apply, ··· and ⌄),
+     * or, tucked, its tab; "Clear all results…" asks first.
+     */
     @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
     @Composable
-    fun ResultsBar(vm: CanvasViewModel, modifier: Modifier) {
-        if (!hasResults()) return
+    fun ResultsTray(vm: CanvasViewModel, modifier: Modifier) {
         val g = generation(LocalContext.current)
         val session = vm.session ?: return
+        io.github.artcraftandroid.procraft.ui.Alert(
+            clearing,
+            title = { n -> if (n == 1) "Clear the result?" else "Clear all $n results?" },
+            message = { "They can't be brought back." },
+            action = "Clear",
+            onCancel = { clearing = null },
+            onAction = { clearing = null; g.discardResults(session); tuck(); poll(g) },
+        )
+        if (!hasResults()) return
+        if (!trayUpState) {
+            TrayTab(modifier)
+            return
+        }
         val shown = state.shown
         val target = shown ?: state.results.lastOrNull()?.id
         Row(
@@ -781,12 +838,12 @@ object GenerationUi {
             }
             }
             state.results.firstOrNull { it.id == target }?.let { r ->
-                Box(Modifier.clip(RoundedCornerShape(10.dp)).background(RowFill).tap { seed = r.seed }.padding(horizontal = 10.dp, vertical = 7.dp)) {
-                    Text("seed ${r.seed}", color = Dim, fontSize = 12.sp)
-                }
                 if (r.scaledFromWidth > 0u) Text("scaled up from\n${r.scaledFromWidth} × ${r.scaledFromHeight}", color = Dim, fontSize = 11.sp, lineHeight = 13.sp)
             }
-            Pill("Again", primary = false, enabled = last != null && state.running == null) { last?.let { run(vm, g, it) } }
+            val againReady = last != null && state.running == null
+            RoundButton("Again", againReady, { last?.let { run(vm, g, it) } }) {
+                Icon(AgainIcon, null, tint = Ink.copy(alpha = if (againReady) 1f else 0.4f), modifier = Modifier.size(22.dp))
+            }
             Pill("Apply", primary = true, enabled = target != null) {
                 target?.let {
                     if (g.applyResult(session, it) != null) vm.showNotice("Added as a layer") else vm.showNotice("No room for another layer", warning = true)
@@ -794,7 +851,87 @@ object GenerationUi {
                     vm.refresh()
                 }
             }
-            Text("×", color = Dim, fontSize = 26.sp, modifier = Modifier.tap { g.discardResults(session); poll(g) }.padding(horizontal = 6.dp))
+            Box {
+                RoundButton("More", true, { trayMenu = !trayMenu }) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { repeat(3) { Box(Modifier.size(5.dp).clip(CircleShape).background(Ink)) } }
+                }
+                if (trayMenu) TrayMenu(state.results.firstOrNull { it.id == target }?.seed)
+            }
+            RoundButton("Tuck the results away", true, { tuck() }) { Chevron(up = false, Ink) }
+        }
+    }
+
+    /** The tray's ··· menu over its button: the result's seed into the popover, and clearing all. */
+    @Composable
+    private fun TrayMenu(seedOf: ULong?) {
+        // its foot 10 above the tray's top: the button (40) sits in the middle of the tray (96)
+        val up = with(LocalDensity.current) { (40.dp + 28.dp + 10.dp).roundToPx() }
+        androidx.compose.ui.window.Popup(
+            alignment = Alignment.BottomEnd,
+            offset = androidx.compose.ui.unit.IntOffset(0, -up),
+            onDismissRequest = { trayMenu = false },
+            properties = androidx.compose.ui.window.PopupProperties(focusable = true),
+        ) {
+            Column(Modifier.width(240.dp).clip(RoundedCornerShape(14.dp)).background(if (Pc.light) Color(0xF7FAFAFA) else Color(0xF7313135))) {
+                val words = seedOf?.let { "Use the seed $it" } ?: "Use the seed"
+                Text(
+                    words, color = Ink.copy(alpha = if (seedOf != null) 1f else 0.4f), fontSize = 15.sp,
+                    modifier = Modifier.fillMaxWidth().tap(seedOf != null) { seed = seedOf; trayMenu = false }.padding(horizontal = 16.dp, vertical = 14.dp),
+                )
+                Box(Modifier.fillMaxWidth().height(1.dp).background(if (Pc.light) Color(0x1F000000) else Color(0x1FFFFFFF)))
+                Text(
+                    "Clear all results…", color = Color(0xFFE84F51), fontSize = 15.sp,
+                    modifier = Modifier.fillMaxWidth().tap { clearing = state.results.size; trayMenu = false }.padding(horizontal = 16.dp, vertical = 14.dp),
+                )
+            }
+        }
+    }
+
+    /** The tray tucked away: its tab at the bottom centre, the shown (or newest) result and how many, or the run going. */
+    @Composable
+    private fun TrayTab(modifier: Modifier) {
+        val run = state.running
+        if (state.results.isEmpty() && run == null) return
+        val words = when {
+            run == null -> "Results · ${state.results.size}"
+            run.extracting -> "Tracing ${if (run.extractKind == io.github.artcraftandroid.procraft.core.LayerControl.SCRIBBLE) "scribble" else "line art"}…"
+            else -> "Generating · ${(run.progress * 100).toInt()}%"
+        }
+        val picture = (state.shown ?: state.results.lastOrNull()?.id)?.let { bitmaps[it] }
+        Row(
+            modifier.padding(bottom = 22.dp).height(42.dp).clip(RoundedCornerShape(21.dp))
+                .background(if (Pc.light) Color(0xF7F1F1F1) else Color(0xF0202020)).tap { trayUpState = true }
+                .padding(start = 7.dp, end = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            when {
+                run != null -> ProgressRing(run.progress, Modifier.size(26.dp))
+                picture != null -> Image(picture, null, contentScale = ContentScale.Crop, modifier = Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)))
+            }
+            Text(words, color = Ink, fontSize = 14.5.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+            Chevron(up = true, Dim)
+        }
+    }
+
+    /** One of the tray's round buttons (40 across), its glyph inside. */
+    @Composable
+    private fun RoundButton(label: String, enabled: Boolean, onClick: () -> Unit, glyph: @Composable () -> Unit) {
+        Box(
+            Modifier.size(40.dp).clip(CircleShape).background(RowFill).tap(enabled) { onClick() }
+                .semantics { contentDescription = label },
+            contentAlignment = Alignment.Center,
+        ) { glyph() }
+    }
+
+    /** A small chevron, pointing up or down. */
+    @Composable
+    private fun Chevron(up: Boolean, colour: Color) {
+        Canvas(Modifier.size(16.dp, 10.dp)) {
+            val w = 2.2.dp.toPx()
+            val (top, bottom) = if (up) size.height - w to w else w to size.height - w
+            drawLine(colour, Offset(w, top), Offset(size.width / 2, bottom), w, StrokeCap.Round)
+            drawLine(colour, Offset(size.width / 2, bottom), Offset(size.width - w, top), w, StrokeCap.Round)
         }
     }
 

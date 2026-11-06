@@ -68,7 +68,8 @@ ProCraft's own design language. It goes upstream later.
 
 - `docs/generation/`: the source of truth. `01-brainstorm.md`, `02-proposal.md` (final),
   `03-design.md` (final, kept up to date as built: change it when behaviour changes),
-  `mockups/phase1.html`. Part D has the milestones and the decisions log.
+  `mockups/phase1.html`. Part D has the milestones and the decisions log. `names.md` lists what
+  each part is called (in the app, the docs and the code): add a name there first.
 - `crates/diffusion/`: the ComfyUI client and everything model-specific, with no GPU and no UI.
   `comfy.rs` (HTTP + WebSocket), `worker.rs` (runs requests on its own thread), `plan.rs`
   (resolution planner, context box), `family/anima.rs` (Anima graphs and tuned constants),
@@ -124,7 +125,9 @@ prose. Commits are semantic (`feat(…)`, `fix(…)`, `docs(…)`, `tune(…)`) 
   change what is generated: no rating tags and no negative-prompt filtering. What people
   generate is up to them.
 - **Test generations use explicitly safe subjects** (landscapes, objects, animals), never an empty
-  or vague prompt: Anima Turbo can produce explicit pictures from an empty one.
+  or vague prompt: Anima Turbo can produce explicit pictures from an empty one. Add `scenery, no
+  humans` to test prompts too: Turbo put a scantily dressed woman into "a cottage garden with
+  flowers, sunny day" (2026-11-06). Clear such test results afterwards and don't preview them.
 - On the tablet: ask before uninstalling the app (it deletes the artworks) or changing security
   settings. Before tapping inside a popover, take a screenshot to check it's open; a tap that
   misses lands on the canvas and paints, so undo exactly those strokes.
@@ -151,12 +154,16 @@ Package `io.github.hekel1989.procraftdiffusion.debug` (the old ProCraft debug ap
   resolution Draft/Normal/Quality, selections Fill/Add/Remove/Expand, Selection-toolbar button),
   M4 (control layers Line art/Scribble with four steps Loose/Balanced/Close/Strict, added from
   the popover's Control part and traced from what's visible with each row's trace button, as in
-  Krita; tag autocomplete with exact, prefix, then alias matches).
+  Krita; tag autocomplete with the exact tag first, then every tag holding the word, then aliases, as
+  Krita matches).
 - **Next:** M5 (the companion CLI).
+- **Results tray** (§A4, built 2026-11-06): the results bar became a tray that tucks into a tab at
+  the bottom centre (⌄, a tap on the canvas, Esc) instead of closing; ↻ Again, ··· with "Use the
+  seed" and "Clear all results…". While it's up the canvas treats it as an open panel.
 - **After Phase 1:** style editing.
 - **Since M3:** results are kept with their artwork in its private `generation/` folder (the
   newest 24; thumbnails in memory, full pictures on disk, read when shown or applied). Holding a
-  thumbnail gives a Delete. The server shows as a button in the popover's title. The results bar
+  thumbnail gives a Delete. The server shows as a button in the popover's title. The results tray
   scrolls.
 - **Open:** the popover's prompt, style and count aren't remembered across app restarts. The
   user has seen a few more small bugs on both platforms that aren't listed yet.

@@ -74,8 +74,10 @@ Hangs from the button with ProCraft's arrow, like Actions' panel; frosted (`reme
      ("12k"). Tap to complete; the completed tag gets ", " after it.
    - With the field empty and focused, the strip shows **recent prompts** instead (the last 20,
      newest first). Tap to fill the field.
-   - *As built:* the strip shows as many chips as fit (at most four recent prompts on desktop);
-     click or Tab/Enter completes the first. The core reports UTF-16 ranges so Kotlin indices work
+   - *As built:* the strip is a row that scrolls sideways when the chips don't fit (on desktop
+     the mouse wheel scrolls it too); a click or tap on a chip completes it, and Tab/Enter
+     completes the first. On desktop a click on the strip keeps the prompt focused, so the strip
+     is still there to take it, and the last search is kept while the text and caret stay the same. The core reports UTF-16 ranges so Kotlin indices work
      unchanged, and desktop converts them to its byte offsets.
 4. **Control layers** (only when there are any) — one row each: the layer's thumbnail and name,
    its kind ("Line art" / "Scribble"), a strength slider (0–100 %), and a remove button.
@@ -86,14 +88,14 @@ Hangs from the button with ProCraft's arrow, like Actions' panel; frosted (`reme
    Fill/Add/Remove, 100 % for Expand.
 7. **Seed and count**, one row:
    - Seed: "Random" by default; tapping it shows the number field with a dice (new random) and a lock
-     (keep this seed). A result's seed can be taken from the results bar.
+     (keep this seed). A result's seed can be taken from the results tray (··· → "Use the seed").
    - Count: a 1 · 2 · 3 · 4 segment.
 8. **Generate** — a full-width accent button: "Generate" (or "Generate 4"). Disabled, with the reason
    under it, when nothing is ready (§A8).
 
 On **Generate** (§D3 4): the run starts, the soft keyboard goes down, and **the popover
 stays open** so the prompt or strength can be tweaked straight after seeing the first results. The
-results bar appears at the bottom with the progress, and previews show on the canvas; the popover
+results tray comes up at the bottom with the progress (its tab while tucked), and previews show on the canvas; the popover
 (400 dp of the 1120 dp width, top left) leaves most of it in view. Tapping the canvas outside it
 closes it, as with every ProCraft popover; reopening shows the same settings. **The prompt and settings belong to the artwork**
 while it's open (switching artworks starts from the last-used settings).
@@ -102,40 +104,84 @@ while it's open (switching artworks starts from the last-used settings).
 40 % of the 800 dp height) the prompt, the suggestions and the Generate button stay above it. If the
 popover is taller than the room left, it scrolls with the prompt pinned.
 
-## A4. Results bar
+## A4. Results tray
 
-A floating bar at the bottom, the adjustment panels' look (frosted, rounded), full width minus
-ProCraft's margins:
+*(Redesigned and built 2026-11-06, replacing the first build's results bar, which had a seed tag,
+an "Again" text button and a ✕ that discarded everything: `results-tray-brainstorm.md`, sketches
+in `mockups/results-tray.html`, names in `names.md`.)*
+
+The **results tray** holds this artwork's results at the bottom of the screen. It is never closed,
+only **tucked away** into the **tray tab**, and it comes back with everything still in it. It is up
+or tucked; the tab shows whenever the artwork has results.
 
 ```
- [ ▣ ▣ ▣ ▣ │ ◌ 63% ]                     [ seed 18234 ⧉ ]   [ Again ]  [ Apply ]   ✕
+ up:      [ ▣ ▣ ▣ ▣ │ ◌ 63% ]                          (↻)  [ Apply ]  (···)  (⌄)
+ tucked:                       ( ▣ Results · 4  ⌃ )
 ```
+
+**The tray** (up): a floating bar, the adjustment panels' look (frosted, rounded), full width minus
+ProCraft's margins, 96 tall, 22 above the screen's bottom edge.
 
 - **Thumbnails** of this artwork's results, newest on the right; older runs scroll left. A running
   job shows as a thumbnail with a live progress ring (and an intermediate picture if the server
-  sends previews, §B6).
+  sends previews, §B6); ✕ on it cancels the run.
 - **Tap a thumbnail** to show it on the canvas (a preview drawn over the canvas, masked to the
   selection when there was one). **Tap it again** to hide it and compare with the original.
 - **Press and hold a thumbnail** (desktop: hold or right-click) for a small red **Delete** above
-  it: that result goes from the bar and from the artwork's folder, for the pictures nobody wants.
-  Tapping elsewhere dismisses it. *(Added 2026-11-05.)*
+  it: that result goes from the tray and from the artwork's folder. Tapping elsewhere dismisses it.
 - **More results than fit** scroll: on Android by swiping the thumbnails, with a fade and ‹ when
   older ones are off to the left; on desktop with ‹ and › or the mouse wheel.
-- **Apply** adds the shown result as a **new layer at the top of the stack**, named
-  "Generated · <first words of the prompt>", masked to the selection (with its feather) if there
-  was one. One undo step ("Generate"). The bar stays, so another result can be applied too.
-  *(M2: at the top rather than above the current layer, because the preview shows over every
-  layer (§B8); the layer lands exactly where the preview showed it.)*
-- **Again** runs the same settings with a new random seed (the fixed seed if locked).
-- **Seed** shows the shown result's seed; tapping copies it into the popover's seed (locked).
-- **✕** discards the results (asks first if none was applied) and closes the bar.
-- **Cancel**: while a run is going, ✕ on the running thumbnail cancels it.
-- Starting a stroke hides the preview (the bar stays); the bar hides with other tools' bars
-  (Adjustments, Transform) and comes back after.
-- **Results stay with the artwork**: leaving it (back to the Gallery) keeps the bar's results, and
-  opening it again brings them back, even after the app restarts. They are saved in the artwork's
-  private `generation/` folder (§B10), up to 24 per artwork (the oldest is dropped and deleted);
-  applied results stay in the bar too. ✕ discards them for good.
+- **Again** (↻, a round icon button, not text) runs the same settings with a new random seed (the
+  fixed seed if locked).
+- **Apply** (the one blue text button) adds the shown result as a **new layer at the top of the
+  stack**, named "Generated · <first words of the prompt>", masked to the selection (with its
+  feather) if there was one. One undo step ("Generate"). The tray stays, so another result can be
+  applied too. *(M2: at the top rather than above the current layer, because the preview shows over
+  every layer (§B8); the layer lands exactly where the preview showed it.)*
+- **··· (More)** opens a small menu above it:
+  - **"Use the seed 18234"**: puts the shown result's seed in the popover's seed, locked (what
+    tapping the seed tag did). Dimmed with no result shown.
+  - **"Clear all results…"** (in red): asks first ("Clear all 4 results? They can't be brought
+    back."), then discards them all from the tray and the artwork's folder. The tray and its tab go.
+- **⌄ (Tuck)** tucks the tray away.
+- **A note** in small text after the thumbnails, where the seed tag was: "Tracing line art…",
+  "scaled up from 1216 × 864" for the shown result, or a run's error.
+
+**Tucking and bringing back**
+
+- **Tucked** by ⌄, by **a tap on the canvas** while the tray is up, or by **Esc** on desktop (when no
+  popover is open; Esc closes a popover first). A tap on the canvas only tucks: nothing is painted.
+  A drag that starts on the canvas tucks it and does what it would have (paints, smudges…), as
+  ProCraft's panels do with a touch outside them.
+- **Tucking keeps the preview**: the shown result stays on the canvas, now uncovered. As before, the
+  first stroke hides it.
+- **The tray tab**, bottom centre, 42 tall, a pill in the tray's look: the shown result's thumbnail
+  (or the newest's) and **"Results · 4"**, then ⌃. **Tap it** to bring the tray up.
+- **While a run is going** the tab shows a progress ring and **"Generating · 63%"** (or
+  **"Tracing line art…"** for a trace, §A6). When a run's first picture is ready, the tray comes up
+  by itself to show it.
+- **Opening an artwork** that has results shows the tab (tucked); the tray comes up only when asked
+  or when a run finishes.
+- **With no results** there is neither tray nor tab.
+- **Other tools' bars**: the tray and its tab hide while Adjustments, Transform or the Selection
+  toolbar is showing, and come back after as they were, up or tucked.
+
+**Results stay with the artwork**: leaving it (back to the Gallery) keeps them, and opening it again
+brings them back, even after the app restarts. They are saved in the artwork's private
+`generation/` folder (§B10), up to 24 per artwork (the oldest is dropped and deleted); applied
+results stay in the tray too. Only a thumbnail's Delete or "Clear all results…" removes them.
+
+*As built:* up or tucked is each app's own state (not the core's), reset to tucked
+when an artwork opens. While the tray is up, the canvas treats it as an open panel: Android's
+`setTouchPanelOpen(...)` and the desktop's popover blocking also count the tray, so the core's
+existing "panel tapped" and "panel fades" touches tuck it. Those are a line each in ProCraft's own
+files (`CanvasSurfaceView.kt`, `AppRoot.kt`, desktop `main.rs`); the rest is in our generation
+files. The core's `discard_results` is unchanged, now called only from "Clear all results…". The ↻
+icon is a stroked arc with a filled head on the 24-unit grid, in code beside the trace icon (both
+apps), not yet in `draw_icons.py`. Desktop: `results_tray` in `generation.rs` (tested headless:
+⌄, the tab, Esc). Tested on the tablet: the tab's progress while generating, the tray coming up
+with the first picture, a tap closing the popover and the next tucking the tray (nothing painted),
+the tab bringing it back after a restart, ··· and "Clear all results…" with its question.
 
 ## A5. Selections
 
@@ -174,8 +220,8 @@ ProCraft's margins:
   pixels** there (inside a selection only; elsewhere the layer keeps its own): black lines on
   transparent, one undo step ("Trace control layer"), so one undo brings back what was drawn. So
   tracing from nothing is two taps (+ Line art, then trace), as in Krita, and a layer can be traced
-  again after the picture changes. While it runs the button is a progress ring, the results bar
-  says "Tracing line art…", and the other trace buttons wait. Extractors (from
+  again after the picture changes. While it runs the button is a progress ring, the results tray
+  (or its tab) says "Tracing line art…", and the other trace buttons wait. Extractors (from
   `comfyui_controlnet_aux`, tuned on the dev server, never named in the UI): line art
   `AnimeLineArtPreprocessor`, scribble `PiDiNetPreprocessor` (safe) then `ScribblePreprocessor`, as
   krita-ai-diffusion does (the one-step `Scribble_PiDiNet_Preprocessor` left broken dots; changed
@@ -276,7 +322,7 @@ desktop (egui) ────┴── procraft-core ── procraft-diffusion ─
 | `crates/core` | small, behind `generation` | `generation.rs`: the app-wide service object and the per-artwork state; snapshotting the canvas; previews; Apply |
 | `crates/engine` | tiny | a layer's optional `control` property (serialised, default none) |
 | `crates/gpu` | small | a preview overlay drawn above the current layer (§B8) |
-| `desktop` | behind `generation` | the button, popover, results bar, settings page, layer-menu row, badge |
+| `desktop` | behind `generation` | the button, popover, results tray, settings page, layer-menu row, badge |
 | `android` | behind `procraft.generation` | the same in Compose; `INTERNET` permission; cleartext to the server |
 | `companion` (`procraft-companion`) | new | the CLI (Part C) |
 
@@ -523,7 +569,7 @@ two passes above 1.5 × the model's size)*. krita-ai-diffusion does the same for
 - **Remembered** with the app's other generation settings; **Quality** at first.
 - **Selections**: the same, with the context box as the area, but always one pass at the target
   (see §B6): the inpaint structure is not repeated for a second pass.
-- **The results bar** notes when a result was scaled up by more than 1.5 × ("scaled up from
+- **The results tray** notes when a result was scaled up by more than 1.5 × ("scaled up from
   1216 × 864"), the note M2 left out.
 - Expected cost on a 24 GB GPU for 2800 × 2000 with the Anima style: Draft ≈ 9 s; Quality roughly
   25–40 s (to measure when built); Anima Turbo much less.
@@ -619,14 +665,24 @@ A style (`styles/anima.json`, our own file):
   both apps get them without asset plumbing (≈ 1.3 MB in the binary).
 - **Index**: loaded once on first use (~100 ms): one list of entries sorted by normalised tag
   (lower case, `_` → space), plus aliases pointing at their tag.
-- **Search**: the word being typed at the caret (text since the last comma) is matched by prefix
-  against tags and aliases (binary search), ranked by `count / largest count in its source` so
+- **Search**: the word being typed at the caret (text since the last comma) is matched anywhere in
+  a tag, as krita-ai-diffusion does ("cat" finds "black cat" and "cat ears"), and at the start of
+  an alias (binary search). The tag typed exactly comes first, then the tags holding the word,
+  then those found through an alias, each ranked by `count / largest count in its source` so
   Danbooru and e621 mix fairly; duplicates across the two keep the higher. NSFW entries only when
-  the switch is on. Top 12 returned.
+  the switch is on. Top 50 returned (12 until 2026-11-06; krita-ai-diffusion lists every match,
+  but our chip row draws each chip). Searching starts at two letters, since many booru tags are two
+  (`xd`, `:3`); Krita waits for three. A word of symbols only starts at one, finding the tags that
+  start with it (`:` gives `:d`, `:3`, `:o`, not "re:zero"), so emoticons can be found without
+  knowing them (the user's idea, 2026-11-06). *(Changed 2026-11-06 from prefix matching, at the
+  user's request; one search over every tag takes about 4 ms.)*
+- **Which tags are NSFW**: those in the two NSFW files, as Krita splits them: explicit tags (sex,
+  genitals). Nudity and suggestive tags (`nude`, `topless`, `panties`) are in the main files and
+  are suggested with the switch off too; the user chose to keep Krita's split (2026-11-06).
 - **Inserted** with spaces instead of underscores, except tags that are emoticons (`^_^`, `>_<`).
 - *As built (M4):* `build.rs` deflates each CSV into `OUT_DIR` and `tags.rs` embeds the four
   blobs; a `OnceLock` inflates and indexes them on first use, whichever thread asks. The core's
-  `Generation::suggest_tags` returns the top 12 with UTF-16 ranges (`complete_tag` inserts one),
+  `Generation::suggest_tags` returns the top 50 with UTF-16 ranges (`complete_tag` inserts one),
   and recent prompts are kept there—newest first, at most 20—and saved by the desktop in its
   `interface` preferences as one escaped `generation_recent` line each.
 
@@ -721,7 +777,7 @@ it is accepted when it rebuilds our dev instance from nothing and the app passes
 
 | Level | What |
 |---|---|
-| Unit (`cargo test`) | graph builder (golden JSON per kind), planner (sizes, rounding, clamps), tag search (prefix, aliases, mixing, NSFW filter), requirements check against saved `object_info`, picture helpers |
+| Unit (`cargo test`) | graph builder (golden JSON per kind), planner (sizes, rounding, clamps), tag search (anywhere in a tag, aliases, mixing, NSFW filter), requirements check against saved `object_info`, picture helpers |
 | Against the dev ComfyUI (`cargo test -- --ignored`, `PROCRAFT_COMFY_URL`) | each graph kind runs and returns the right count and size; cancel; missing-model errors |
 | Core (`crates/core/src/tests.rs` style) | apply = one undo step; selection masking; control layers left out of the picture; leaving an artwork cancels |
 | On the test tablet | a checklist per milestone: the screens at 1120 × 800 dp, keyboard overlap, pen and finger, Wi-Fi and `adb reverse` |
@@ -735,6 +791,7 @@ it is accepted when it rebuilds our dev instance from nothing and the app passes
 | **M2 Generate on the tablet** ✅ | renderer overlay spike; `generation.rs` in core + UniFFI; `generation` switches (Cargo, Gradle, manifest); Android: button, icon, popover (prompt, styles, strength, seed, count), results bar, Prefs page, states; desktop: the same; on-device pass |
 | **M3 Selections** | selection graphs + modes; mode guess; Selection toolbar button; tuning grow/blur/colour match on real pictures |
 | **M4 Control layers + autocomplete** | engine `control` property; layer menu row + badge; popover rows; control image preparation; tag files, index, suggestion strip, recent prompts |
+| **Results tray** ✅ (2026-11-06, before M5) | §A4 on both apps: tucking (⌄, a tap on the canvas, Esc) and the tray tab; the tray as an open panel for the canvas's touches; ↻ icon; ··· with "Use the seed" and "Clear all results…"; the note line; tested on the tablet (tap out, drag out, tab, run while tucked, other tools' bars) and on desktop |
 | **M5 Companion** | `procraft-companion` install / models / check / start / stop; model list with hashes; Windows pass; rebuild the dev instance with it |
 
 ### M2 as delivered (2026-11-05)
@@ -760,6 +817,8 @@ Not done yet, carried forward:
 | 3 | Desktop shortcut | **`G`** opens Generate |
 | 4 | Popover on Generate | **Stays open** for tweaking (§A3) |
 | 5 | Leaving an artwork during a run | **(a) cancel the run; results stay saved with the artwork** |
+| 6 | The results bar (2026-11-06) | **A tray that tucks away**, never closed: the **results tray** and its **tray tab** at the bottom centre (§A4) |
+| 7 | Tray buttons | **Again as an icon** (↻); the seed moves into ··· ("Use the seed"); clearing all moves into ··· and asks first |
 
 **5, in detail.** Results are saved with the artwork (§B10, brought forward from Phase 2). Going
 back to the Gallery, or opening another artwork, while a run is going cancels the run: the pictures
