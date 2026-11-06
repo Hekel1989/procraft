@@ -67,7 +67,6 @@ pub fn read(dir: &Path) -> Result<Installed, String> {
 }
 
 /// Writes it. Only `install` does this; the other commands only read.
-#[allow(dead_code)]
 pub fn write(dir: &Path, installed: &Installed) -> Result<(), String> {
     let path = dir.join(FILE);
     let text = serde_json::to_string_pretty(installed).map_err(|e| format!("{}: {e}", path.display()))?;
