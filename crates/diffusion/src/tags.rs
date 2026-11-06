@@ -2,10 +2,13 @@
 //!
 //! The four CSVs in `tags/` (`tag,type,count,aliases`) are deflated at build time and embedded
 //! compressed; the first search inflates and parses them into one index. The index holds every
-//! tag and every alias, sorted by its normalised form (lower case, `_` turned into a space), so a
-//! prefix is one binary search. Results are ranked by how much of its site's most-used tag a
-//! entry has, which mixes Danbooru's and e621's very different counts fairly; the same tag in both
-//! lists appears once, by its higher score. NSFW lists are searched only when asked for.
+//! tag and every alias, sorted by its normalised form (lower case, `_` turned into a space), so an
+//! alias's prefix is one binary search; tags themselves are matched anywhere in them, as
+//! krita-ai-diffusion does ("cat" finds "black cat" and "cat ears"). The tag typed exactly comes
+//! first, then every tag holding the word, then those found through an alias, each by how much of
+//! its site's most-used tag an entry has, which mixes Danbooru's and e621's very different counts
+//! fairly; the same tag in both lists appears once, by its higher score. NSFW lists are searched
+//! only when asked for.
 //!
 //! What comes back is the tag as it should be typed (spaces for underscores, except for emoticon
 //! tags, which have no letters and are kept as they are), its kind, a short count for the chip and
@@ -44,7 +47,7 @@ pub enum TagKind {
     Meta,
 }
 
-/// One tag a prefix found.
+/// One tag a search found.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Suggestion {
     /// The tag as it should be inserted.
@@ -62,7 +65,7 @@ pub struct Suggestion {
     pub alias: Option<String>,
 }
 
-/// What a prefix found: the range it covers and the suggestions, best first.
+/// What a search found: the range it covers and the suggestions, best first.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Suggestions {
     pub from: usize,
@@ -229,16 +232,21 @@ impl Index {
         tag.count as f64 / largest as f64
     }
 
-    /// The prefix search behind [`suggest`].
+    /// The search behind [`suggest`].
     fn suggest(&self, text: &str, caret: usize, nsfw: bool, most: usize) -> Suggestions {
         let Some((from, to, word)) = word(text, caret) else { return Suggestions::default() };
         let query = normalise(word);
-        if query.chars().count() < 2 {
+        // a word of symbols (":", "^") is looked up from its first character, letters from two;
+        // one symbol only finds tags starting with it (":" gives ":d" and ":3", not "re:zero")
+        let symbols = !query.chars().any(char::is_alphanumeric);
+        let length = query.chars().count();
+        if length < if symbols { 1 } else { 2 } {
             return Suggestions { from, to, items: Vec::new() };
         }
+        let anywhere = !(symbols && length == 1);
         let start = self.keys.partition_point(|key| key.key.as_str() < query.as_str());
-        // per tag, its best match: the lowest tier (an exact match, then the tag starting with
-        // the word, then one of its aliases starting with it), then the higher score
+        // per tag, its best match: the lowest tier (an exact match, then the tag holding the word,
+        // then one of its aliases starting with it), then the higher score
         let mut best: HashMap<&str, Match> = HashMap::new();
         let tail = self.keys.get(start..).unwrap_or_default();
         for key in tail.iter().take_while(|key| key.key.starts_with(&query)) {
@@ -252,19 +260,18 @@ impl Index {
             } else if key.alias {
                 Tier::Alias
             } else {
-                Tier::Prefix
+                Tier::Contains
             };
             let found = Match { tier, score: self.score(tag), at, alias: key.alias.then(|| key.key.clone()) };
-            match best.entry(tag.key.as_str()) {
-                MapEntry::Vacant(v) => {
-                    v.insert(found);
-                }
-                MapEntry::Occupied(mut o) => {
-                    if found.better_than(o.get()) {
-                        o.insert(found);
-                    }
-                }
+            keep_best(&mut best, tag.key.as_str(), found);
+        }
+        // the tags holding the word anywhere (a pass over them all: a few milliseconds)
+        for (at, tag) in self.tags.iter().enumerate().filter(|_| anywhere) {
+            if (tag.nsfw && !nsfw) || !tag.key.contains(query.as_str()) {
+                continue;
             }
+            let tier = if tag.key == query { Tier::Exact } else { Tier::Contains };
+            keep_best(&mut best, tag.key.as_str(), Match { tier, score: self.score(tag), at, alias: None });
         }
         let mut found: Vec<Match> = best.into_values().collect();
         found.sort_unstable_by(|a, b| {
@@ -300,8 +307,8 @@ impl Index {
 enum Tier {
     /// The word is the tag, or one of its aliases, exactly.
     Exact,
-    /// The tag starts with the word.
-    Prefix,
+    /// The tag holds the word, anywhere in it.
+    Contains,
     /// One of the tag's aliases starts with the word.
     Alias,
 }
@@ -312,6 +319,20 @@ struct Match {
     score: f64,
     at: usize,
     alias: Option<String>,
+}
+
+/// Keeps `found` for the tag `key` if it is the tag's best match so far.
+fn keep_best<'a>(best: &mut HashMap<&'a str, Match>, key: &'a str, found: Match) {
+    match best.entry(key) {
+        MapEntry::Vacant(v) => {
+            v.insert(found);
+        }
+        MapEntry::Occupied(mut o) => {
+            if found.better_than(o.get()) {
+                o.insert(found);
+            }
+        }
+    }
 }
 
 impl Match {
@@ -442,19 +463,36 @@ mod tests {
         index.add("long_hair", TagKind::General, 700, Source::Danbooru, false, &["long hair".to_owned()]);
         index.add("^_^", TagKind::General, 120, Source::Danbooru, false, &[]);
         index.add("dog", TagKind::General, 80, Source::Danbooru, false, &[]);
+        index.add("black_cat", TagKind::General, 400, Source::Danbooru, false, &[]);
+        index.add(":d", TagKind::General, 600, Source::Danbooru, false, &[]);
+        index.add(":3", TagKind::General, 200, Source::Danbooru, false, &[]);
+        index.add("re:zero", TagKind::Copyright, 700, Source::Danbooru, false, &[]);
         index.add("penis", TagKind::General, 300, Source::Danbooru, true, &[]);
         index.finish();
         index
     }
 
     #[test]
-    fn prefix_ranking_mixes_sources_and_keeps_the_higher_duplicate() {
+    fn the_word_comes_first_then_every_tag_holding_it_by_use() {
         let found = sample().suggest("cat", 3, false, 12);
         let tags: Vec<&str> = found.items.iter().map(|s| s.tag.as_str()).collect();
-        assert_eq!(tags, ["cat", "caterpillar", "cathode"], "the word itself first");
+        // "black cat" holds the word inside it, and ranks by how much it is used
+        assert_eq!(tags, ["cat", "caterpillar", "black cat", "cathode"], "the word itself first");
         let cat = found.items.iter().find(|s| s.tag == "cat").unwrap();
         assert_eq!(cat.count, "100");
         assert_eq!(cat.source, Source::Danbooru);
+    }
+
+    #[test]
+    fn one_symbol_finds_the_tags_starting_with_it_and_one_letter_nothing() {
+        let tags = |word: &str| -> Vec<String> {
+            sample().suggest(word, word.len(), false, 12).items.into_iter().map(|s| s.tag).collect()
+        };
+        assert_eq!(tags(":"), [":d", ":3"], "the emoticons, not the title with a colon in it");
+        assert_eq!(tags("^"), ["^_^"]);
+        assert!(tags("c").is_empty(), "a letter waits for a second");
+        // two symbols or more search anywhere again
+        assert_eq!(tags(":3"), [":3"]);
     }
 
     #[test]

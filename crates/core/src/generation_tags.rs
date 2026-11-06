@@ -16,7 +16,7 @@ use procraft_diffusion::tags::{self, TagKind as DiffusionKind};
 use crate::generation::Generation;
 
 /// How many suggestions the popover is offered.
-const MOST_SUGGESTIONS: usize = 12;
+const MOST_SUGGESTIONS: usize = 50;
 /// How many recent prompts are kept.
 const MOST_RECENT: usize = 20;
 
@@ -72,7 +72,7 @@ static RECENT: Mutex<Vec<String>> = Mutex::new(Vec::new());
 #[uniffi::export]
 impl Generation {
     /// The tags matching the word being typed at `caret` (a UTF-16 offset), best first, at most
-    /// twelve. NSFW tags follow the setting.
+    /// fifty. NSFW tags follow the setting.
     pub fn suggest_tags(&self, text: String, caret: u32) -> Vec<TagSuggestion> {
         let nsfw = self.settings.lock().nsfw;
         let byte = utf16_to_byte(&text, caret as usize);

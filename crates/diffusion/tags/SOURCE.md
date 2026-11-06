@@ -4,7 +4,8 @@ The four CSV files here are copied unchanged from krita-ai-diffusion 1.55.5
 (<https://github.com/Acly/krita-ai-diffusion>, `ai_diffusion/tags/`):
 
 - `Danbooru.csv` and `Danbooru NSFW.csv`: tags from Danbooru's public tag dataset
-  (danbooru.donmai.us). A tag counts as SFW when it is only used on `rating:general` posts.
+  (danbooru.donmai.us). The NSFW file holds the explicit tags (sex acts, genitals); the main one
+  still has nudity and suggestive tags (`nude`, `nipples`, `topless`, `panties`).
 - `e621.csv` and `e621 NSFW.csv`: tags from e621.net.
 
 Columns: `tag,type,count,aliases`. `type` is Danbooru's category (0 general, 1 artist, 3 copyright,
