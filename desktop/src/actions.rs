@@ -384,7 +384,10 @@ fn groups(tab: usize, showing: &Showing, prefs: &Prefs) -> Vec<Vec<Row>> {
             ]
         }
         _ => vec![
-            vec![Button("About ProCraft", None, Some(Act::About)), Button("Licences", None, Some(Act::Licences))],
+            vec![
+                Button("About ProCraft Diffusion", None, Some(Act::About)),
+                Button("Licences", None, Some(Act::Licences)),
+            ],
             vec![
                 Button("Keyboard shortcuts", None, Some(Act::Shortcuts)),
                 Button("Advanced settings", None, Some(Act::AdvancedSettings)),

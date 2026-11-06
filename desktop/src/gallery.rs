@@ -634,7 +634,7 @@ impl Gallery {
     fn select_header(&mut self, ui: &Ui, look: &mut Look, screen: Rect) {
         let painter = ui.painter();
         let top = screen.top();
-        let title = self.stack.as_ref().map_or("ProCraft", |s| s.1.as_str()).to_owned();
+        let title = self.stack.as_ref().map_or(crate::APP_NAME, |s| s.1.as_str()).to_owned();
         text(
             painter,
             pos2(screen.left() + 32.0, top + 11.0),
@@ -889,7 +889,7 @@ impl Gallery {
                 ui.painter(),
                 pos2(field.center().x, field.bottom() + 12.0),
                 Align2::CENTER_TOP,
-                "ProCraft",
+                crate::APP_NAME,
                 64.0,
                 Weight::Bold,
                 Color32::WHITE,
@@ -1125,7 +1125,7 @@ impl Gallery {
                 painter,
                 pos2(screen.left() + 32.0, top + 11.0),
                 Align2::LEFT_TOP,
-                "ProCraft",
+                crate::APP_NAME,
                 36.0,
                 Weight::Bold,
                 argb(TITLE).gamma_multiply(title_in),

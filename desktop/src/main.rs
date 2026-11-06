@@ -627,7 +627,7 @@ impl App {
         let edits = session.edits();
         let saved = edits == self.ui.saved_edits || session.edits_saved() == Some(edits);
         let unsaved = if saved { "" } else { " •" };
-        let title = format!("{}{unsaved} — ProCraft", session.name());
+        let title = format!("{}{unsaved} — {APP_NAME}", session.name());
         if title != self.title {
             screen.window.set_title(&title);
             self.title = title;

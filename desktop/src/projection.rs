@@ -24,7 +24,7 @@ impl Projection {
     /// A borderless window filling `monitor`, its surface on `gpu`'s device.
     pub fn open(event_loop: &ActiveEventLoop, monitor: MonitorHandle, gpu: &Gpu) -> Option<Projection> {
         let attributes = Window::default_attributes()
-            .with_title("ProCraft")
+            .with_title(crate::APP_NAME)
             .with_decorations(false)
             .with_fullscreen(Some(Fullscreen::Borderless(Some(monitor.clone()))))
             // the keyboard stays with the main window
