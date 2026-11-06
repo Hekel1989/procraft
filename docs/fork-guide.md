@@ -12,7 +12,8 @@ know, and the few things you might need to do.
 
 ## What happens by itself
 
-Every morning at **08:00 (UK time)**, a GitHub robot:
+Every morning at **08:00 (UK time)**, a GitHub robot (GitHub is busy then, so it often starts
+an hour or so late, and very occasionally skips a day):
 
 1. takes our app,
 2. mixes in everything new from ProCraft,

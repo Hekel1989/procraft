@@ -10,7 +10,8 @@ name: Upstream sync
 # that carry workflow files, and a personal token would be a secret to look after.)
 on:
   # 08:00 in London is 08:00 UTC in winter and 07:00 UTC in summer: both are scheduled, and the
-  # run that isn't 08:00 in London stops at once (GitHub may start a scheduled run a few minutes late)
+  # one for the other season stops at once. It goes by which schedule fired, not the clock, since
+  # GitHub often starts scheduled runs late (an hour or more around the top of the hour)
   schedule:
     - cron: "0 7 * * *"
     - cron: "0 8 * * *"
@@ -44,9 +45,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/artcraft-android/procraft.git
-          if [ "${{ github.event_name }}" = schedule ] && [ "$(TZ=Europe/London date +%H)" != 08 ]; then
+          # summer time (+0100) keeps the 07:00 UTC schedule, winter the 08:00 one
+          if [ "$(TZ=Europe/London date +%z)" = +0100 ]; then season="0 7 * * *"; else season="0 8 * * *"; fi
+          if [ "${{ github.event_name }}" = schedule ] && [ "${{ github.event.schedule }}" != "$season" ]; then
             echo "new=0" >> "$GITHUB_OUTPUT"
-            echo "Not 08:00 in London: the other scheduled run does it." >> "$GITHUB_STEP_SUMMARY"
+            echo "The other season's schedule: the one for 08:00 in London does it." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           git fetch --quiet upstream main
