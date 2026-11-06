@@ -81,9 +81,36 @@ pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerMod
     let file = |kind| family.pick(kind, models).ok_or_else(|| missing(kind));
     let style = &request.style;
     let mut g = Graph::new();
+    if !style.missing.is_empty() {
+        return Err(Error::Missing(style.missing_files()));
+    }
+    let own = |kind, chosen: &Option<String>| chosen.clone().map_or_else(|| file(kind), Ok);
     let checkpoint = g.add("UNETLoader", [("unet_name", json!(style.checkpoint)), ("weight_dtype", json!("default"))]);
-    let clip = g.add("CLIPLoader", [("clip_name", json!(file(ModelKind::TextEncoder)?)), ("type", json!("omnigen2"))]);
-    let vae = g.add("VAELoader", [("vae_name", json!(file(ModelKind::Vae)?))]);
+    let clip = g.add(
+        "CLIPLoader",
+        [("clip_name", json!(own(ModelKind::TextEncoder, &style.text_encoder)?)), ("type", json!("omnigen2"))],
+    );
+    let vae = g.add("VAELoader", [("vae_name", json!(own(ModelKind::Vae, &style.vae)?))]);
+    // the style's LoRAs on the model and the text encoder alike (most change only the model),
+    // then its CFG rescale
+    let (mut model, mut encoder): (Out, Out) = (checkpoint.out(0), clip.out(0));
+    for lora in &style.loras {
+        let loaded = g.add(
+            "LoraLoader",
+            [
+                ("model", model.into()),
+                ("clip", encoder.into()),
+                ("lora_name", json!(lora.file)),
+                ("strength_model", json!(lora.strength)),
+                ("strength_clip", json!(lora.strength)),
+            ],
+        );
+        (model, encoder) = (loaded.out(0), loaded.out(1));
+    }
+    if let Some(multiplier) = style.rescale_cfg {
+        model =
+            g.add("RescaleCFG", [("model", model.into()), ("multiplier", json!(multiplier.clamp(0.0, 1.0)))]).out(0);
+    }
     // each control layer's lines on the model before sampling, its picture at `width × height`
     let with_controls = |g: &mut Graph, mut model: Out, width: u32, height: u32| -> Result<Out, Error> {
         for control in &request.controls {
@@ -106,8 +133,7 @@ pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerMod
         }
         Ok(model)
     };
-    let text =
-        |g: &mut Graph, text: String| g.add("CLIPTextEncode", [("clip", clip.out(0).into()), ("text", json!(text))]);
+    let text = |g: &mut Graph, text: String| g.add("CLIPTextEncode", [("clip", encoder.into()), ("text", json!(text))]);
     let selection = request.selection.as_ref();
     let removing = selection.is_some_and(|s| s.mode == SelectionMode::Remove);
     let prompt = if removing { "" } else { request.prompt.as_str() };
@@ -117,7 +143,7 @@ pub(super) fn graph(request: &Request, plan: Plan, seed: u64, models: &ServerMod
     } else {
         text(&mut g, style.negative.clone())
     };
-    let base: Out = checkpoint.out(0);
+    let base: Out = model;
     let sampler = |g: &mut Graph, model: Out, latent: Out, denoise: f64| {
         g.add(
             "KSampler",
@@ -575,6 +601,41 @@ mod tests {
         assert_eq!(json[&inpaint_apply]["inputs"]["model"], json!([&inpaint_load, 0]));
         let samplers = built.nodes_of("KSampler");
         assert_eq!(json[&samplers[0]]["inputs"]["model"], json!([&inpaint_apply, 0]));
+    }
+
+    #[test]
+    fn loras_and_the_rescale_go_between_the_loaders_and_everything_else() {
+        let mut r = request(1.0);
+        r.style.loras = vec![
+            crate::styles::LoraUse { file: "anima/a.safetensors".into(), strength: 0.7, trigger: String::new() },
+            crate::styles::LoraUse { file: "anima/b.safetensors".into(), strength: 1.2, trigger: String::new() },
+        ];
+        r.style.rescale_cfg = Some(0.7);
+        r.style.vae = Some("other_vae.safetensors".into());
+        let built = graph(&r, one_pass(1024, 1024), 1, &models()).unwrap();
+        let json = built.to_json();
+        let loras = built.nodes_of("LoraLoader");
+        assert_eq!(loras.len(), 2);
+        assert_eq!(json[&loras[0]]["inputs"]["model"], json!(["1", 0]));
+        assert_eq!(json[&loras[0]]["inputs"]["clip"], json!(["2", 0]));
+        assert_eq!(json[&loras[0]]["inputs"]["strength_model"], json!(0.7_f32));
+        assert_eq!(json[&loras[1]]["inputs"]["model"], json!([&loras[0], 0]));
+        let rescale = built.nodes_of("RescaleCFG");
+        assert_eq!(json[&rescale[0]]["inputs"]["model"], json!([&loras[1], 0]));
+        let samplers = built.nodes_of("KSampler");
+        assert_eq!(json[&samplers[0]]["inputs"]["model"], json!([&rescale[0], 0]));
+        for encode in built.nodes_of("CLIPTextEncode") {
+            assert_eq!(json[&encode]["inputs"]["clip"], json!([&loras[1], 1]));
+        }
+        assert_eq!(json["3"]["inputs"]["vae_name"], "other_vae.safetensors");
+    }
+
+    #[test]
+    fn a_style_missing_a_lora_stops_before_anything_is_queued() {
+        let mut r = request(1.0);
+        r.style.missing = vec![(crate::styles::Part::Lora, "anima/gone.safetensors".into())];
+        let err = graph(&r, one_pass(64, 64), 1, &models()).unwrap_err();
+        assert_eq!(err.to_string(), "the server is missing anima/gone.safetensors in models/loras");
     }
 
     #[test]

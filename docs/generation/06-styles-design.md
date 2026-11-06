@@ -401,6 +401,36 @@ trigger = "@dragonball"
 
 ## C2. Work breakdown
 
+*M6 as built (2026-11-06):*
+- **`crates/diffusion`**:
+  - `styles.rs` reads TOML through `toml_edit`. The built-in styles are now `styles/anima.toml`
+    and `styles/anima-turbo.toml`; their `model` is a list of patterns (`["anima_base*",
+    "anima-base*"]`), which hand-written files may use too.
+  - A mistake reads as one line ("Line 1, column 13: invalid basic string, expected `"`").
+  - `loras.rs` reads the server's `loras.toml` when the app connects.
+  - The Anima graph chains a `LoraLoader` per LoRA, then `RescaleCFG`, and uses a style's VAE or
+    text encoder when it names one.
+  - `plan_at` with `ModelSize::best(n)` gives best size its range and Krita's second pass.
+  - `diffusion-cli generate --style Moonlit.toml` runs a style file.
+- **Checked on the dev ComfyUI**: the dark art style LoRA at 0.8 attached its 448 patches, and
+  best size 1024 on a 1536 × 1024 Quality picture made 1232 × 832, then 1536 × 1024.
+- **Core**: `generation_styles.rs` with `set_style_files` and `StyleInfo` (`family`, `kind`,
+  `file`, `note`, `reason`). `size_for` takes the style. A run with a style that can't run stops
+  with its reason.
+- **Desktop**: `generation_styles.rs`. The folder is read every 2 s while the popover is open.
+  The strip now scrolls sideways (it showed three cards before), with badges and notes.
+- **Android**: `StylesFolder.kt`. The server view's **Styles folder** row (Choose / Change)
+  arrived here, ahead of M8: without a save in M6 there was nothing else to start the picker
+  from.
+  - Android can only make a folder with a file in it, so the app writes **"About these
+    files.txt"**: two lines on what the files are and that any text editor opens them.
+  - Checked on the OnePlus Pad:
+    - the picker opens inside Documents › ProCraft Diffusion › Styles;
+    - the grant survives a reinstall;
+    - styles copied in by `adb` show on the next open, yours first, with "Missing LoRA" and
+      "Can't be read";
+    - a Best size style's plan reads "2 passes".
+
 | Milestone | Work |
 |---|---|
 | **M6 Styles as files, with LoRAs** | `styles.rs` on TOML (built-ins moved); `loras.rs` reading `loras.toml`; LoRAs, rescale CFG, VAE and text encoder in the Anima graph; trigger words in the prompt; best size in the planner; core's `set_style_files` and the new `StyleInfo`; both apps reading the folder, the card order, badges and missing notes; Android's first save, question and picker (tested with a style written by hand); `diffusion-cli --style <file>` |

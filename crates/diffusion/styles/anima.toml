@@ -1,0 +1,14 @@
+# A ProCraft Diffusion style: Anima, the quality one. Built in, so it can't be changed in the app;
+# duplicate it to make your own.
+name = "Anima"
+family = "anima"
+# the checkpoint: the first of these the server has (`*` stands for anything)
+model = ["anima_base*", "anima-base*"]
+
+prompt = "masterpiece, best quality, {prompt}"
+negative = "worst quality, low quality, blurry, jpeg artifacts, watermark, signature"
+
+sampler = "euler_ancestral"
+scheduler = "normal"
+steps = 30
+cfg = 4.0

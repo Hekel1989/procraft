@@ -25,8 +25,8 @@ use parking_lot::Mutex;
 use procraft_diffusion::plan::context_box;
 use procraft_diffusion::{
     Address, Connection, Control as RequestControl, ControlKind as RequestControlKind, ControlStep as RequestStep,
-    Extraction as RequestExtraction, Feature, Picture, Request, Resolution as PlanResolution, RunId,
-    Selection as RequestSelection, SelectionMode as RequestMode, Worker, largest_for_vram, plan_for,
+    Extraction as RequestExtraction, Feature, ModelSize, Picture, Request, Resolution as PlanResolution, RunId,
+    Selection as RequestSelection, SelectionMode as RequestMode, Style, Worker, largest_for_vram, plan_at,
 };
 use procraft_engine::cms::{Lut, builtin};
 use procraft_engine::document::{Document, LayerId};
@@ -197,17 +197,6 @@ pub struct ServerStatus {
     /// The largest picture in force, in megapixels: the setting, or the GPU's default.
     #[uniffi(default = 0.0)]
     pub largest_megapixels: f32,
-}
-
-/// A style the server can run.
-#[derive(Clone, Debug, PartialEq, uniffi::Record)]
-pub struct StyleInfo {
-    pub id: String,
-    pub name: String,
-    pub steps: u32,
-    pub cfg: f32,
-    /// Made from a checkpoint found on the server rather than built in.
-    pub found: bool,
 }
 
 /// How closely a control layer is followed, from a loose shaping of the picture's start to lines
@@ -515,7 +504,9 @@ struct Artwork {
 /// artwork's session.
 #[derive(uniffi::Object)]
 pub struct Generation {
-    worker: Worker,
+    pub(crate) worker: Worker,
+    /// The person's styles folder, as the app last read it.
+    pub(crate) style_files: Mutex<Vec<procraft_diffusion::StyleFile>>,
     pub(crate) settings: Mutex<GenerationSettings>,
     artwork: Mutex<Artwork>,
     /// What finished loads report to; [`Generation::state`] takes them in when ready.
@@ -543,6 +534,7 @@ impl Generation {
         let (saved_sender, saved) = mpsc::channel();
         let generation = Generation {
             worker: Worker::new(),
+            style_files: Mutex::default(),
             settings: Mutex::new(settings.clone()),
             artwork: Mutex::default(),
             loaded: Mutex::new(loaded),
@@ -657,7 +649,7 @@ impl Generation {
 
     /// What `resolution` makes of `session`'s area (the selection's context box when there is a
     /// selection): its target, passes and generated size.
-    pub fn size_for(&self, session: &CanvasSession, resolution: GenerationResolution) -> SizeInfo {
+    pub fn size_for(&self, session: &CanvasSession, resolution: GenerationResolution, style: String) -> SizeInfo {
         let server = self.worker.server();
         let selection = selection_bounds(session);
         let (width, height) = match selection {
@@ -672,9 +664,11 @@ impl Generation {
         };
         // A selection is one pass at the target (see the worker): its second pass would have to
         // repeat the whole inpaint structure.
-        let family = procraft_diffusion::Family::Anima;
+        let style = self.style_by_id(&server, &style);
+        let family = style.as_ref().map_or(procraft_diffusion::Family::Anima, |s| s.family);
+        let model = style.as_ref().map_or(ModelSize::family(family.native_pixels()), Style::model_size);
         let largest = self.largest_megapixels(&server).min(family.most_megapixels());
-        let plan = plan_for(width, height, family.native_pixels(), resolution.into(), largest, selection.is_some());
+        let plan = plan_at(width, height, model, resolution.into(), largest, selection.is_some());
         SizeInfo {
             width: plan.target.width,
             height: plan.target.height,
@@ -685,16 +679,6 @@ impl Generation {
             from_height: plan.size.height,
             largest_megapixels: largest,
         }
-    }
-
-    /// The styles the server can run: the built-in ones first.
-    pub fn styles(&self) -> Vec<StyleInfo> {
-        self.worker
-            .server()
-            .styles()
-            .into_iter()
-            .map(|s| StyleInfo { id: s.id, name: s.name, steps: s.steps, cfg: s.cfg, found: s.found })
-            .collect()
     }
 
     /// The artwork open in `session` lives in `folder`: its kept results are read from
@@ -733,13 +717,12 @@ impl Generation {
         if server.connection != Connection::Connected {
             return Err(GenerationError::NotReady { reason: "not connected to a server".to_owned() });
         }
-        let styles = server.styles();
-        let style = styles
-            .iter()
-            .find(|s| s.id == run.style)
-            .or_else(|| styles.first())
-            .cloned()
+        let style = self
+            .style_by_id(&server, &run.style)
             .ok_or_else(|| GenerationError::NotReady { reason: "the server has no Anima model".to_owned() })?;
+        if let Some(reason) = crate::generation_styles::StyleInfo::from(&style).reason {
+            return Err(GenerationError::NotReady { reason });
+        }
         let selected = current_selection(session);
         let refine = run.strength < 1.0;
         let feature = if selected.is_some() {
@@ -2074,31 +2057,31 @@ mod tests {
         let session = CanvasSession::new(2800, 2000);
         let settings = GenerationSettings { address: String::new(), nsfw: false, largest_megapixels: Some(6.0) };
         let generation = Generation::new(settings);
-        let quality = generation.size_for(&session, GenerationResolution::Quality);
+        let quality = generation.size_for(&session, GenerationResolution::Quality, String::new());
         // Anima's own limit (4.2 MP) caps it below the 6 MP setting, made in one pass
         assert_eq!((quality.width, quality.height), (2416, 1728));
         assert_eq!(quality.passes, 1);
         assert_eq!((quality.from_width, quality.from_height), (2416, 1728));
         assert!(quality.capped);
         assert_eq!(quality.largest_megapixels, 4.2);
-        let normal = generation.size_for(&session, GenerationResolution::Normal);
+        let normal = generation.size_for(&session, GenerationResolution::Normal, String::new());
         assert_eq!((normal.width, normal.height), (1400, 1000));
         assert_eq!(normal.passes, 1, "near the model's size: one pass");
         assert_eq!((normal.from_width, normal.from_height), (1408, 1008));
         assert!(normal.scaled_up);
-        let draft = generation.size_for(&session, GenerationResolution::Draft);
+        let draft = generation.size_for(&session, GenerationResolution::Draft, String::new());
         assert_eq!((draft.width, draft.height), (1216, 864));
         assert_eq!(draft.passes, 1);
         assert!(draft.scaled_up);
 
         let large = CanvasSession::new(4096, 4096);
-        let capped = generation.size_for(&large, GenerationResolution::Quality);
+        let capped = generation.size_for(&large, GenerationResolution::Quality, String::new());
         assert!(capped.capped);
         assert_eq!(capped.width % 16, 0);
         assert_eq!(capped.height % 16, 0);
         assert!(u64::from(capped.width) * u64::from(capped.height) <= 4_200_000);
         // Krita's often-used 1632 × 2048 (3.3 MP) is made at its own size in one pass, not capped
-        let tall = generation.size_for(&CanvasSession::new(1632, 2048), GenerationResolution::Quality);
+        let tall = generation.size_for(&CanvasSession::new(1632, 2048), GenerationResolution::Quality, String::new());
         assert!(!tall.capped);
         assert_eq!((tall.from_width, tall.from_height, tall.passes), (1632, 2048, 1));
     }
@@ -2141,7 +2124,7 @@ mod tests {
         let info = generation.selection(&s).unwrap();
         assert_eq!((info.x, info.y, info.width, info.height), (26, 26, 148, 148));
         assert_eq!(info.mode, GenerationMode::Fill);
-        let size = generation.size_for(&s, GenerationResolution::Quality);
+        let size = generation.size_for(&s, GenerationResolution::Quality, String::new());
         assert_eq!((size.width, size.height), (148, 148), "the context box is the area");
     }
 

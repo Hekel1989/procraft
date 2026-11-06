@@ -161,7 +161,9 @@ Package `io.github.hekel1989.procraftdiffusion.debug` (the old ProCraft debug ap
   Krita matches).
 - **M5** (the companion CLI, `companion/`): done on Linux 2026-11-06, a fresh install accepted;
   Windows written but untested.
-- **Next:** M6 (styles as files, with LoRAs; `docs/generation/06-styles-design.md`).
+- **M6** (styles as TOML files with LoRAs, best size, the styles folder; 06-design §C2): built
+  2026-11-06, checked on the tablet; desktop to be tried.
+- **Next:** M7 (the Style Studio).
 - **Results tray** (§A4, built 2026-11-06): the results bar became a tray that tucks into a tab at
   the bottom centre (⌄, a tap on the canvas, Esc) instead of closing; ↻ Again, ··· with "Use the
   seed" and "Clear all results…". While it's up the canvas treats it as an open panel.

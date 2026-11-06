@@ -161,6 +161,7 @@ mod tests {
             vaes: vec!["qwen_image_vae.safetensors".into()],
             controls: controls.iter().map(|&c| c.to_owned()).collect(),
             nodes: nodes.iter().map(|&n| n.to_owned()).collect(),
+            ..ServerModels::default()
         }
     }
 

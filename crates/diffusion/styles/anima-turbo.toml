@@ -1,0 +1,14 @@
+# A ProCraft Diffusion style: Anima Turbo, the fast one. Built in, so it can't be changed in the
+# app; duplicate it to make your own.
+name = "Anima Turbo"
+family = "anima"
+# the checkpoint: the first of these the server has (`*` stands for anything)
+model = ["anima_turbo*", "anima-turbo*"]
+
+prompt = "masterpiece, best quality, {prompt}"
+negative = "worst quality, low quality, blurry"
+
+sampler = "euler"
+scheduler = "simple"
+steps = 8
+cfg = 1.0

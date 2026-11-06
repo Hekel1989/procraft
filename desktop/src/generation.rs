@@ -75,7 +75,6 @@ const PAD: f32 = 16.0;
 const LABEL: Themed = Themed(0x99FFFFFF, 0x99000000);
 const FIELD: Themed = Themed(0x12FFFFFF, 0x12000000);
 const ROW: Themed = Themed(0x0DFFFFFF, 0xFFD8D8D8);
-const CARD: Themed = Themed(0x2E5B5B5B, 0xFFD7D7D7);
 const INK: Themed = Themed(0xFFFFFFFF, 0xFF222222);
 const DIM: Themed = Themed(0x99FFFFFF, 0x99000000);
 const TRACK: Themed = Themed(0xFF414141, 0xFFBEBEBE);
@@ -163,6 +162,10 @@ pub struct GenerationUi {
     control_signature: Vec<(u64, String, Option<LayerControl>, bool, u64)>,
     control_pictures: HashMap<u64, TextureHandle>,
     control_steps: HashMap<u64, ControlStep>,
+    /// The person's styles folder, read again every little while the popover is open.
+    styles_folder: crate::generation_styles::StylesFolder,
+    /// The chosen style can't run, so the form shows why under Generate.
+    style_blocked: bool,
 }
 
 impl GenerationUi {
@@ -222,6 +225,8 @@ impl GenerationUi {
             control_signature: Vec::new(),
             control_pictures: HashMap::new(),
             control_steps: HashMap::new(),
+            styles_folder: Default::default(),
+            style_blocked: false,
         }
     }
 
@@ -340,6 +345,7 @@ impl GenerationUi {
         let (left, arrow_x) = panel::place(ctx, WIDTH, button.center().x);
         let top = screen.top() + pc::BAR_HEIGHT;
         self.refresh_controls(ctx, session);
+        self.styles_folder.refresh(&self.generation);
         self.selection = self.generation.selection(session);
         let area = self.selection.map(|s| (s.x, s.y, s.width, s.height));
         if area != self.selection_area {
@@ -367,7 +373,7 @@ impl GenerationUi {
     }
 
     fn form_height(&self) -> f32 {
-        let error = if self.state.error.is_some() { 40.0 } else { 0.0 };
+        let error = if self.state.error.is_some() || self.style_blocked { 40.0 } else { 0.0 };
         let selection = if self.selection.is_some() { 70.0 } else { 0.0 };
         let controls = 22.0 + CONTROL_ROW * self.controls.len() as f32 + ADD_ROW + 10.0;
         let strip = crate::generation_tags::STRIP_HEIGHT + crate::generation_tags::STRIP_GAP;
@@ -439,45 +445,15 @@ impl GenerationUi {
         y += 22.0;
         let styles = self.generation.styles();
         if !styles.iter().any(|s| s.id == self.style)
-            && let Some(first) = styles.first()
+            && let Some(first) = styles.iter().find(|s| s.reason.is_none()).or(styles.first())
         {
             self.style = first.id.clone();
         }
-        let mut x = left;
-        for s in styles.iter().take(3) {
-            let card = Rect::from_min_size(pos2(x, y), vec2(116.0, 76.0));
-            let on = s.id == self.style;
-            ui.painter().rect_filled(card, 12.0, argb(CARD));
-            if on {
-                ui.painter().rect_stroke(
-                    card,
-                    12.0,
-                    egui::Stroke::new(2.0, argb(pc::ACCENT)),
-                    egui::StrokeKind::Inside,
-                );
-            }
-            let name = Rect::from_min_size(card.min + vec2(10.0, 10.0), vec2(card.width() - 20.0, 40.0));
-            ui.scope_builder(UiBuilder::new().max_rect(name), |ui| {
-                ui.add(
-                    egui::Label::new(egui::RichText::new(&s.name).font(Weight::SemiBold.font(14.0)).color(argb(INK)))
-                        .wrap(),
-                );
-            });
-            let sub = format!("{} steps · CFG {}", s.steps, s.cfg);
-            text(
-                ui.painter(),
-                pos2(card.left() + 10.0, card.bottom() - 10.0),
-                Align2::LEFT_BOTTOM,
-                &sub,
-                11.0,
-                Weight::Regular,
-                argb(DIM),
-            );
-            if ui.interact(card, ui.scope_id().with(("style", &s.id)), Sense::click()).clicked() {
-                self.style = s.id.clone();
-            }
-            x += 116.0 + 6.0;
+        if let Some(id) = crate::generation_styles::strip(ui, pos2(left, y), right - left, &styles, &self.style) {
+            self.style = id;
         }
+        let blocked = styles.iter().find(|s| s.id == self.style).and_then(|s| s.reason.clone());
+        self.style_blocked = blocked.is_some();
         if styles.is_empty() {
             let words = "No Anima model on the server";
             text(
@@ -806,7 +782,7 @@ impl GenerationUi {
             }
         }
         y += 46.0;
-        let info = self.generation.size_for(session, self.resolution);
+        let info = self.generation.size_for(session, self.resolution, self.style.clone());
         let detail = plan_text(&info);
         text(ui.painter(), pos2(left + 2.0, y), Align2::LEFT_TOP, &detail, 12.0, Weight::Regular, argb(DIM));
         y += 24.0;
@@ -815,7 +791,10 @@ impl GenerationUi {
         let running = self.state.running.as_ref();
         let add_waiting = self.selection.is_some_and(|s| self.mode.unwrap_or(s.mode) == GenerationMode::Add)
             && self.prompt.trim().is_empty();
-        let ready = self.server.connection == ServerConnection::Connected && !styles.is_empty() && !add_waiting;
+        let ready = self.server.connection == ServerConnection::Connected
+            && !styles.is_empty()
+            && !add_waiting
+            && blocked.is_none();
         let words = match running {
             Some(r) if r.extracting => format!("Cancel · Tracing {}…", extract_name(r.extract_kind)),
             Some(r) => format!("Cancel · {:.0}%", r.progress * 100.0),
@@ -836,7 +815,8 @@ impl GenerationUi {
             }
         }
         y += 60.0;
-        if let Some(error) = &self.state.error {
+        let idle = self.state.running.is_none();
+        if let Some(error) = self.state.error.as_ref().or(blocked.as_ref().filter(|_| idle)) {
             let at = Rect::from_min_max(pos2(left + 2.0, y), pos2(right, y + 36.0));
             ui.scope_builder(UiBuilder::new().max_rect(at), |ui| {
                 ui.add(

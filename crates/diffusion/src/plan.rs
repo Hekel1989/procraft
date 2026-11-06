@@ -111,10 +111,38 @@ pub fn context_box(bounds: [u32; 4], canvas: (u32, u32)) -> [u32; 4] {
     [left, top, right.saturating_sub(left), bottom.saturating_sub(top)]
 }
 
+/// The size a model makes pictures at: about `pixels`, each side between `min_side` and
+/// `max_side`. A family's own range is wide (Anima composes well up to 2048 a side, so its pictures
+/// are one pass at the target); a style's best size narrows it to within 20 % of that side, as
+/// Krita does, and a target clearly bigger than that is made in two passes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModelSize {
+    pub pixels: u32,
+    pub min_side: u32,
+    pub max_side: u32,
+    /// A target clearly bigger than the range is made at the model's size first, then refined at
+    /// the target.
+    pub second_pass: bool,
+}
+
+impl ModelSize {
+    /// A family's own: about `pixels`, sides from [`MIN_SIDE`] to [`MAX_SIDE`], one pass.
+    pub const fn family(pixels: u32) -> ModelSize {
+        ModelSize { pixels, min_side: MIN_SIDE, max_side: MAX_SIDE, second_pass: false }
+    }
+
+    /// A style's best size, `side` pixels a side: its square's pixels, sides within 20 % of it.
+    pub fn best(side: u32) -> ModelSize {
+        let side = side.clamp(MULTIPLE * 16, MAX_SIDE);
+        let offset = ((f64::from(side) * 0.2 / f64::from(MULTIPLE)).round() as u32) * MULTIPLE;
+        ModelSize { pixels: side * side, min_side: side - offset, max_side: side + offset, second_pass: true }
+    }
+}
+
 /// The model's own plan for an area: about `pixels`, shape kept, sides on the grid and between
 /// [`MIN_SIDE`] and [`MAX_SIDE`].
 pub fn plan(width: u32, height: u32, pixels: u32) -> Plan {
-    let size = native(width, height, pixels);
+    let size = native(width, height, ModelSize::family(pixels));
     Plan { first: size, second: None, size, target: size, capped: false }
 }
 
@@ -122,8 +150,17 @@ pub fn plan(width: u32, height: u32, pixels: u32) -> Plan {
 /// `pixels`: `resolution` chooses the target, `largest` (megapixels) caps it, and `refine` makes
 /// one pass at the target from the picture there is.
 pub fn plan_for(width: u32, height: u32, pixels: u32, resolution: Resolution, largest: f32, refine: bool) -> Plan {
+    plan_at(width, height, ModelSize::family(pixels), resolution, largest, refine)
+}
+
+/// As [`plan_for`], for a model that makes pictures at `model`'s size (a style's best size, or its
+/// family's). With a best size, a new picture whose target is clearly bigger than the model's range
+/// (a side beyond it, and more than about 10 % bigger each way) is made at the model's size and
+/// refined at the target, as Krita does; `refine` and selections stay one pass, at the model's size
+/// when the target is bigger.
+pub fn plan_at(width: u32, height: u32, model: ModelSize, resolution: Resolution, largest: f32, refine: bool) -> Plan {
     let area = Size::new(width.max(1), height.max(1));
-    let native = native(area.width, area.height, pixels);
+    let native = native(area.width, area.height, model);
     let chosen = match resolution {
         Resolution::Draft => native,
         Resolution::Normal => {
@@ -133,6 +170,19 @@ pub fn plan_for(width: u32, height: u32, pixels: u32, resolution: Resolution, la
         Resolution::Quality => area,
     };
     let (target, capped) = capped(chosen, largest);
+    if model.second_pass {
+        let bigger = target.pixels() > native.pixels();
+        if refine || !bigger {
+            return Plan { first: native, second: None, size: native, target, capped };
+        }
+        let scale = (native.pixels() as f64 / target.pixels() as f64).sqrt();
+        if scale < 0.9 && target.width.max(target.height) > model.max_side {
+            let second = grid(target);
+            return Plan { first: native, second: Some(second), size: second, target, capped };
+        }
+        let size = grid(target);
+        return Plan { first: size, second: None, size, target, capped };
+    }
     if refine {
         let size = if target.pixels() < native.pixels() { native } else { grid(target) };
         return Plan { first: size, second: None, size, target, capped };
@@ -146,13 +196,13 @@ pub fn plan_for(width: u32, height: u32, pixels: u32, resolution: Resolution, la
     }
 }
 
-/// The model's own size for an area: about `pixels` with its shape kept.
-fn native(width: u32, height: u32, pixels: u32) -> Size {
+/// The model's own size for an area: about its pixels with the area's shape kept.
+fn native(width: u32, height: u32, model: ModelSize) -> Size {
     let (w, h) = (f64::from(width.max(1)), f64::from(height.max(1)));
-    let scale = (f64::from(pixels) / (w * h)).sqrt();
+    let scale = (f64::from(model.pixels) / (w * h)).sqrt();
     let side = |s: f64| {
         let rounded = ((s / f64::from(MULTIPLE)).round() as u32).max(1) * MULTIPLE;
-        rounded.clamp(MIN_SIDE, MAX_SIDE)
+        rounded.clamp(model.min_side, model.max_side.max(model.min_side))
     };
     Size::new(side(w * scale), side(h * scale))
 }
@@ -304,6 +354,40 @@ mod tests {
         assert_eq!(p.passes(), 1);
         let small = plan_for(600, 400, MP, Resolution::Quality, 6.0, true);
         assert_eq!(small.size, plan(600, 400, MP).size, "never below the model's size");
+    }
+
+    #[test]
+    fn a_best_size_makes_its_square_and_refines_a_bigger_target() {
+        let best = ModelSize::best(1024);
+        assert_eq!((best.min_side, best.max_side), (816, 1232));
+        let draft = plan_at(2800, 2000, best, Resolution::Draft, 6.0, false);
+        assert_eq!((draft.first, draft.passes()), (Size::new(1216, 864), 1));
+        // Quality on a big canvas: the model's size first, then the target
+        let quality = plan_at(2800, 2000, best, Resolution::Quality, 6.0, false);
+        assert_eq!(quality.first, Size::new(1216, 864));
+        assert_eq!(quality.second, Some(Size::new(2800, 2000)));
+        assert_eq!(quality.size, Size::new(2800, 2000));
+        // a little bigger than the model's size: one pass at the target
+        let near = plan_at(1200, 1000, best, Resolution::Quality, 6.0, false);
+        assert_eq!((near.first, near.passes()), (Size::new(1200, 1008), 1));
+        // refining and selections: one pass at the model's size
+        let refine = plan_at(2800, 2000, best, Resolution::Quality, 6.0, true);
+        assert_eq!((refine.first, refine.passes(), refine.target), (Size::new(1216, 864), 1, Size::new(2800, 2000)));
+        // a small best size keeps sides near it
+        let small = plan_at(3000, 1000, ModelSize::best(512), Resolution::Draft, 6.0, false);
+        assert_eq!(small.first.width, 608, "within 20 % of 512");
+    }
+
+    #[test]
+    fn without_a_best_size_nothing_changes() {
+        for resolution in [Resolution::Draft, Resolution::Normal, Resolution::Quality] {
+            for refine in [false, true] {
+                assert_eq!(
+                    plan_at(2800, 2000, ModelSize::family(MP), resolution, 4.2, refine),
+                    plan_for(2800, 2000, MP, resolution, 4.2, refine)
+                );
+            }
+        }
     }
 
     #[test]

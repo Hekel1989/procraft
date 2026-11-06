@@ -182,6 +182,8 @@ object GenerationUi {
     private var wasRunning = false
     private var address by mutableStateOf("")
     private var state by mutableStateOf(GenerationState(null, emptyList(), null, null))
+    // counts the times the styles folder was read, so the cards follow it
+    private var stylesRead by mutableStateOf(0)
     private var server by mutableStateOf<ServerStatus?>(null)
     private var last: RunSettings? = null
     private var error by mutableStateOf<String?>(null)
@@ -335,6 +337,12 @@ object GenerationUi {
             hasResults() -> Modifier.heightIn(max = screen - Pc.BarHeight - 42.dp - 22.dp - 34.dp)
             else -> Modifier
         }
+        // the styles folder, read again each time the popover opens: a style edited elsewhere shows
+        LaunchedEffect(Unit) {
+            val files = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { StylesFolder.read(context) }
+            g.setStyleFiles(files)
+            stylesRead++
+        }
         Popover(400.dp, arrowX, modifier.then(room)) {
             when {
                 view == View.SERVER -> ServerView(context, g)
@@ -377,11 +385,11 @@ object GenerationUi {
     private fun ColumnScope.Form(vm: CanvasViewModel, g: Generation) {
         val focus = LocalFocusManager.current
         Title()
-        val styles = remember(server) { g.styles() }
+        val styles = remember(server, stylesRead) { g.styles() }
         Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
             // the styles: cards in a row, the chosen one ringed
             Label("STYLE")
-            if (styles.none { it.id == style }) styles.firstOrNull()?.let { style = it.id }
+            if (styles.none { it.id == style }) (styles.firstOrNull { it.reason == null } ?: styles.firstOrNull())?.let { style = it.id }
             Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (s in styles) {
                     val shape = RoundedCornerShape(12.dp)
@@ -390,8 +398,13 @@ object GenerationUi {
                             .then(if (s.id == style) Modifier.border(2.dp, Pc.Accent, shape) else Modifier)
                             .tap { style = s.id }.padding(10.dp),
                     ) {
-                        Text(s.name, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, modifier = Modifier.weight(1f))
-                        Text("${s.steps} steps · CFG ${s.cfg}", color = Dim, fontSize = 11.sp, maxLines = 1)
+                        Row(Modifier.weight(1f)) {
+                            Text(s.name, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            FamilyBadge(s.family)
+                        }
+                        val note = s.note
+                        if (note != null) Text(note, color = WARN, fontSize = 11.sp, maxLines = 1)
+                        else Text("${s.steps} steps · CFG ${s.cfg}", color = Dim, fontSize = 11.sp, maxLines = 1)
                     }
                 }
                 if (styles.isEmpty()) Text("No Anima model on the server", color = Dim, fontSize = 14.sp, modifier = Modifier.padding(vertical = 26.dp))
@@ -534,7 +547,7 @@ object GenerationUi {
                 }
             }
             vm.session?.let { session ->
-                val size = g.sizeFor(session, resolution)
+                val size = g.sizeFor(session, resolution, style)
                 Text(planText(size), color = Dim, fontSize = 12.sp, modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 4.dp))
             }
         }
@@ -544,7 +557,8 @@ object GenerationUi {
             val selection = vm.session?.let { g.selection(it) }
             val picked = selection?.let { mode ?: it.mode }
             val needsPrompt = picked == GenerationMode.ADD && prompt.isBlank()
-            val ready = server?.connection == ServerConnection.CONNECTED && styles.isNotEmpty() && !needsPrompt
+            val blocked = styles.firstOrNull { it.id == style }?.reason
+            val ready = server?.connection == ServerConnection.CONNECTED && styles.isNotEmpty() && !needsPrompt && blocked == null
             val words = when {
                 running != null -> "Cancel · ${(running.progress * 100).toInt()}%"
                 count > 1 -> "Generate $count"
@@ -561,7 +575,44 @@ object GenerationUi {
                 contentAlignment = Alignment.Center,
             ) { Text(words, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold) }
             if (needsPrompt && running == null) Text("Add needs a prompt: say what to put there.", color = Dim, fontSize = 13.sp, modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 10.dp))
-            (error ?: state.error)?.let { Text(it, color = WARN, fontSize = 13.sp, modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 10.dp)) }
+            (error ?: state.error ?: blocked?.takeIf { running == null })?.let { Text(it, color = WARN, fontSize = 13.sp, modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 10.dp)) }
+        }
+    }
+
+    /** A style card's badge: its model family's short name in a small pill, in the family's tint. */
+    @Composable
+    private fun FamilyBadge(family: String) {
+        val (ink, fill) = when (family) {
+            "Anima" -> if (Pc.light) Color(0xFF5B3FC4) to Color(0x268E6CEF) else Color(0xFFC3B2FF) to Color(0x338E6CEF)
+            else -> if (Pc.light) Color(0xFF4A4A4A) to Color(0x1F000000) else Color(0xFFCFCFCF) to Color(0x33FFFFFF)
+        }
+        Box(Modifier.padding(start = 4.dp).height(16.dp).clip(RoundedCornerShape(8.dp)).background(fill).padding(horizontal = 6.dp), contentAlignment = Alignment.Center) {
+            Text(family, color = ink, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        }
+    }
+
+    /** The server view's Styles folder row: where the styles are, and the picker to choose it. */
+    @Composable
+    private fun StylesFolderRow(context: Context, g: Generation) {
+        var shown by remember { mutableStateOf(StylesFolder.shownName(context)) }
+        val pick = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()) { tree ->
+            if (tree != null) {
+                StylesFolder.chosen(context, tree)
+                shown = StylesFolder.shownName(context)
+                g.setStyleFiles(StylesFolder.read(context))
+                stylesRead++
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth().height(56.dp).clip(RoundedCornerShape(14.dp)).background(RowFill)
+                .tap { pick.launch(StylesFolder.prepare(context)) }.padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Styles folder", color = Ink, fontSize = 15.sp)
+                Text(shown ?: "Not chosen yet", color = Dim, fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            }
+            Text(if (shown == null) "Choose" else "Change", color = Pc.Accent, fontSize = 15.sp, fontWeight = FontWeight.Medium)
         }
     }
 
@@ -663,6 +714,7 @@ object GenerationUi {
                 Text("Show NSFW tags", color = Ink, fontSize = 15.sp, modifier = Modifier.weight(1f))
                 Switch(settings.nsfw)
             }
+            StylesFolderRow(context, g)
             Text("Pictures and prompts go to this server and nowhere else.", color = Dim, fontSize = 12.5.sp)
             server?.licence?.takeIf { it.isNotEmpty() }?.let { Text("Anima: $it", color = Dim, fontSize = 12.5.sp) }
         }

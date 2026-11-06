@@ -28,6 +28,8 @@ ureq = { version = "3.5", default-features = false }
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 # the tag lists are deflated at build time and inflated on first use
 miniz_oxide = { workspace = true }
+# styles and the LoRA notes are TOML files people read and edit: edited in place, comments kept
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
 
 [build-dependencies]
 miniz_oxide = { workspace = true }

@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! diffusion-cli [--server ADDRESS] check
-//! diffusion-cli [--server ADDRESS] generate [PROMPT] [--style ID] [--size WxH] [--count N]
+//! diffusion-cli [--server ADDRESS] generate [PROMPT] [--style ID|FILE.toml] [--size WxH] [--count N]
 //!     [--seed N] [--strength S --input FILE] [--resolution draft|normal|quality]
 //!     [--mask FILE --mode fill|add|remove|expand] [--largest MP] [--nsfw] [-o FILE]
 //! ```
@@ -15,11 +15,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use procraft_diffusion::{
     Address, Connection, Family, Feature, Picture, Plan, Request, Resolution, Selection, SelectionMode, ServerState,
-    Worker, largest_for_vram, plan_for,
+    StyleFile, Worker, largest_for_vram, plan_at,
 };
 
 const USAGE: &str = "usage: diffusion-cli [--server ADDRESS] check
-       diffusion-cli [--server ADDRESS] generate [PROMPT] [--style ID] [--size WxH] [--count N]
+       diffusion-cli [--server ADDRESS] generate [PROMPT] [--style ID|FILE.toml] [--size WxH] [--count N]
            [--seed N] [--strength S --input FILE] [--resolution draft|normal|quality]
            [--mask FILE --mode fill|add|remove|expand] [--largest MP] [--nsfw] [-o FILE]";
 
@@ -133,13 +133,37 @@ fn check(server: &ServerState) {
 }
 
 fn generate(worker: &Worker, server: &ServerState, prompt: &str, args: &[String]) -> Result<(), String> {
-    let styles = server.styles();
     let wanted = flag(args, "--style").unwrap_or("anima");
-    let style = styles
-        .iter()
-        .find(|s| s.id == wanted || s.name.eq_ignore_ascii_case(wanted))
-        .cloned()
-        .ok_or_else(|| format!("no style {wanted} on this server (see `check`)"))?;
+    // a style file (`Moonlit.toml`) is read as one of the person's own
+    let files = match wanted.ends_with(".toml") {
+        true => {
+            let text = std::fs::read_to_string(wanted).map_err(|e| format!("{wanted}: {e}"))?;
+            let name = Path::new(wanted).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            vec![StyleFile { name, text }]
+        }
+        false => Vec::new(),
+    };
+    let styles = server.styles_with(&files);
+    let style = match files.first() {
+        Some(file) => styles.iter().find(|s| s.id == format!("user:{}", file.name)),
+        None => styles.iter().find(|s| s.id == wanted || s.name.eq_ignore_ascii_case(wanted)),
+    }
+    .cloned()
+    .ok_or_else(|| format!("no style {wanted} on this server (see `check`)"))?;
+    if let Some(problem) = &style.problem {
+        return Err(format!("{wanted}: {problem}"));
+    }
+    for lora in &style.loras {
+        println!(
+            "LoRA {} at {:.0} %{}",
+            lora.file,
+            lora.strength * 100.0,
+            match lora.trigger.is_empty() {
+                true => String::new(),
+                false => format!(", trigger words {}", lora.trigger),
+            }
+        );
+    }
     let picture = flag(args, "--input")
         .map(|file| {
             std::fs::read(file)
@@ -198,7 +222,7 @@ fn generate(worker: &Worker, server: &ServerState, prompt: &str, args: &[String]
     let vram = server.stats.as_ref().and_then(|s| s.gpu.as_ref()).map_or(0, |(_, bytes)| *bytes);
     let largest = request.largest.unwrap_or_else(|| largest_for_vram(vram)).min(request.style.family.most_megapixels());
     let one_pass = !request.is_new() || request.selection.is_some();
-    let plan = plan_for(size.0, size.1, request.style.family.native_pixels(), request.resolution, largest, one_pass);
+    let plan = plan_at(size.0, size.1, request.style.model_size(), request.resolution, largest, one_pass);
     print_plan(&plan);
     let out = PathBuf::from(flag(args, "-o").unwrap_or("generated.png"));
     let started = Instant::now();

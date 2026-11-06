@@ -15,9 +15,10 @@ use parking_lot::{Condvar, Mutex};
 use serde_json::json;
 
 use crate::comfy::{Comfy, Event, Socket, SystemStats};
-use crate::plan::{largest_for_vram, plan_for};
+use crate::loras::{LoraNotes, NOTES_PATH};
+use crate::plan::{largest_for_vram, plan_at};
 use crate::requirements::{Feature, Readiness, all_nodes};
-use crate::{Address, ControlKind, Error, Family, Graph, Picture, Request, ServerModels, Style, styles_for};
+use crate::{Address, ControlKind, Error, Family, Graph, Picture, Request, ServerModels, Style, StyleFile, styles_for};
 
 /// Sampling previews are kept at most this big.
 const PREVIEW_SIDE: u32 = 512;
@@ -46,6 +47,8 @@ pub struct ServerState {
     pub models: Option<ServerModels>,
     /// Per family, the features it's ready for.
     pub readiness: Vec<(Family, Readiness)>,
+    /// The trigger words and default strengths kept for its LoRAs (empty when it has none yet).
+    pub lora_notes: LoraNotes,
 }
 
 impl ServerState {
@@ -54,9 +57,14 @@ impl ServerState {
         self.connection == Connection::Connected && self.readiness.iter().any(|(f, r)| *f == family && r.ready(feature))
     }
 
-    /// The styles the server can run.
+    /// The built-in styles and the found ones the server can run.
     pub fn styles(&self) -> Vec<Style> {
-        self.models.as_ref().map(styles_for).unwrap_or_default()
+        self.styles_with(&[])
+    }
+
+    /// The person's styles from `files`, then the built-in and found ones.
+    pub fn styles_with(&self, files: &[StyleFile]) -> Vec<Style> {
+        self.models.as_ref().map(|m| styles_for(m, files, &self.lora_notes)).unwrap_or_default()
     }
 }
 
@@ -291,12 +299,13 @@ fn work(shared: &Shared) {
                     continue;
                 }
                 match found {
-                    Ok((stats, models)) => {
+                    Ok((stats, models, notes)) => {
                         let readiness = Family::ALL.iter().map(|&f| (f, Readiness::check(f, &models))).collect();
                         inner.server.connection = Connection::Connected;
                         inner.server.stats = Some(stats);
                         inner.server.models = Some(models);
                         inner.server.readiness = readiness;
+                        inner.server.lora_notes = notes;
                         comfy = Some(api);
                     }
                     Err(e) => {
@@ -338,11 +347,20 @@ fn request_address(shared: &Shared) -> String {
     shared.inner.lock().server.address.as_ref().map(ToString::to_string).unwrap_or_default()
 }
 
-/// Finds out what the server is and has.
-fn connect(api: &Comfy) -> Result<(SystemStats, ServerModels), Error> {
+/// Finds out what the server is and has, and what's kept about its LoRAs. A server whose user
+/// folder can't be read (an old ComfyUI) just has no notes.
+fn connect(api: &Comfy) -> Result<(SystemStats, ServerModels, LoraNotes), Error> {
     let stats = api.system_stats()?;
     let models = api.models(&all_nodes())?;
-    Ok((stats, models))
+    let notes = match api.user_file(NOTES_PATH) {
+        Ok(Some(text)) => LoraNotes::read(&text),
+        Ok(None) => LoraNotes::default(),
+        Err(e) => {
+            log::warn!("the LoRA notes couldn't be read: {e}");
+            LoraNotes::default()
+        }
+    };
+    Ok((stats, models, notes))
 }
 
 /// How many of the latest pictures the worker remembers, for runs the server answers from its
@@ -411,7 +429,7 @@ fn run(
     // Selections are one pass at the target: a second pass would have to repeat the whole inpaint
     // structure. The refine plan is exactly one pass at the target, never below the model's size.
     let one_pass = !request.is_new() || request.selection.is_some();
-    let plan = plan_for(width, height, family.native_pixels(), request.resolution, largest, one_pass);
+    let plan = plan_at(width, height, request.style.model_size(), request.resolution, largest, one_pass);
     let weights = pass_weights(&plan, request.style.steps, family);
     let count = request.count.max(1);
     for i in 0..count {

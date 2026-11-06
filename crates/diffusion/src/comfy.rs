@@ -75,6 +75,11 @@ pub struct ServerModels {
     pub vaes: Vec<String>,
     /// `models/controlnet` as the tooling add-on's control loader lists it (empty without it).
     pub controls: Vec<String>,
+    /// `models/loras` (`LoraLoader`), with their folders.
+    pub loras: Vec<String>,
+    /// The samplers and schedulers `KSampler` offers.
+    pub samplers: Vec<String>,
+    pub schedulers: Vec<String>,
     /// The nodes asked about that the server has.
     pub nodes: Vec<String>,
 }
@@ -135,11 +140,16 @@ impl Comfy {
                 present.push(node.to_owned());
             }
         }
+        let sampler = self.node_info("KSampler")?;
+        let of_sampler = |input| sampler.as_ref().map(|info| input_choices(info, input)).unwrap_or_default();
         Ok(ServerModels {
             diffusion_models: choices("UNETLoader", "unet_name")?,
             text_encoders: choices("CLIPLoader", "clip_name")?,
             vaes: choices("VAELoader", "vae_name")?,
             controls: choices("ETN_control_load", "weights")?,
+            loras: choices("LoraLoader", "lora_name")?,
+            samplers: of_sampler("sampler_name"),
+            schedulers: of_sampler("scheduler"),
             nodes: present,
         })
     }
@@ -164,6 +174,21 @@ impl Comfy {
         self.send(&self.agent, "/queue", &json!({ "delete": [prompt_id] })).map(drop)
     }
 
+    /// The text of `path` in ComfyUI's user folder (`userdata`); none if there's no such file yet.
+    pub fn user_file(&self, path: &str) -> Result<Option<String>, Error> {
+        let url = self.address.http(&format!("/userdata/{}", encode_path(path)));
+        let mut answer = self.agent.get(url).call().map_err(|e| self.unreachable(e))?;
+        if answer.status() == 404 {
+            return Ok(None);
+        }
+        if !answer.status().is_success() {
+            return Err(Error::Server { message: format!("its user folder answered {}", answer.status()) });
+        }
+        let mut text = String::new();
+        answer.body_mut().as_reader().read_to_string(&mut text).map_err(Error::protocol)?;
+        Ok(Some(text))
+    }
+
     fn get(&self, path: &str) -> Result<Value, Error> {
         let answer = self.agent.get(self.address.http(path)).call().map_err(|e| self.unreachable(e))?;
         read_json(answer)
@@ -181,6 +206,20 @@ impl Comfy {
     fn unreachable(&self, reason: impl std::fmt::Display) -> Error {
         Error::Unreachable { address: self.address.to_string(), reason: reason.to_string() }
     }
+}
+
+/// A path under the user folder as one URL segment: everything but letters, digits and `-_.~`
+/// percent-encoded, `/` included (as `userdata` wants it).
+fn encode_path(path: &str) -> String {
+    let mut out = String::new();
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
+            out.push(char::from(byte));
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }
 
 /// The answer's body as JSON (an empty body as null).

@@ -30,6 +30,8 @@ mod gallery;
 #[cfg(feature = "generation")]
 mod generation;
 #[cfg(feature = "generation")]
+mod generation_styles;
+#[cfg(feature = "generation")]
 mod generation_tags;
 mod gestures;
 mod gradients;
@@ -119,8 +121,10 @@ pub use gallery::{ArtworkStore, GalleryArtwork, GalleryEntry, ZipKind, zip_file_
 pub use generation::{
     ControlLayerInfo, ControlSetting, ControlStep, FeatureStatus, Generation, GenerationError, GenerationFeature,
     GenerationMode, GenerationResolution, GenerationSettings, GenerationState, ResultInfo, RunInfo, RunSettings,
-    SelectionInfo, ServerConnection, ServerStatus, SizeInfo, StyleInfo, generation_address,
+    SelectionInfo, ServerConnection, ServerStatus, SizeInfo, generation_address,
 };
+#[cfg(feature = "generation")]
+pub use generation_styles::{StyleFileText, StyleInfo, StyleKind};
 #[cfg(feature = "generation")]
 pub use generation_tags::{TagCompletion, TagKind, TagSuggestion};
 pub use gestures::{
