@@ -140,5 +140,5 @@ trigger = "@dragonball"
 
 ### Next
 
-The brainstorm for style editing is settled. Its proposal, `05-styles-proposal.md`, is final;
-next is the design.
+The brainstorm for style editing is settled. Its proposal, `05-styles-proposal.md`, and its design,
+`06-styles-design.md`, are final; next is M6.

@@ -69,7 +69,8 @@ ProCraft's own design language. It goes upstream later.
 - `docs/generation/`: the source of truth. `01-brainstorm.md`, `02-proposal.md` (final),
   `03-design.md` (final, kept up to date as built: change it when behaviour changes),
   `mockups/phase1.html`. The design's Part D has the milestones and the decisions log. Phase 2:
-  `04-phase2-brainstorm.md`, then `05-styles-proposal.md` (style editing, the first part; final).
+  `04-phase2-brainstorm.md`, then `05-styles-proposal.md` and `06-styles-design.md` (style
+  editing, the first part; both final, the design kept up to date as built).
   `names.md` lists what each part is called (in the app, the docs and the code): add a name there
   first.
 - `crates/diffusion/`: the ComfyUI client and everything model-specific, with no GPU and no UI.
@@ -158,11 +159,14 @@ Package `io.github.hekel1989.procraftdiffusion.debug` (the old ProCraft debug ap
   the popover's Control part and traced from what's visible with each row's trace button, as in
   Krita; tag autocomplete with the exact tag first, then every tag holding the word, then aliases, as
   Krita matches).
-- **Next:** M5 (the companion CLI).
+- **M5** (the companion CLI, `companion/`): done on Linux 2026-11-06, a fresh install accepted;
+  Windows written but untested.
+- **Next:** M6 (styles as files, with LoRAs; `docs/generation/06-styles-design.md`).
 - **Results tray** (§A4, built 2026-11-06): the results bar became a tray that tucks into a tab at
   the bottom centre (⌄, a tap on the canvas, Esc) instead of closing; ↻ Again, ··· with "Use the
   seed" and "Clear all results…". While it's up the canvas treats it as an open panel.
-- **After Phase 1:** style editing.
+- **After Phase 1:** style editing, designed (`06-styles-design.md`): M6 styles as files with
+  LoRAs, M7 the Style Studio, M8 trigger words and sharing.
 - **Since M3:** results are kept with their artwork in its private `generation/` folder (the
   newest 24; thumbnails in memory, full pictures on disk, read when shown or applied). Holding a
   thumbnail gives a Delete. The server shows as a button in the popover's title. The results tray
