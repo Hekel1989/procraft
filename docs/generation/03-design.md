@@ -769,6 +769,21 @@ Rust, in our fork's workspace (`companion/`), sharing `requirements.rs` with the
 downloads, `sha2` for hashes, `flate2`/`zip` for archives, `clap` for arguments. Linux and Windows;
 it is accepted when it rebuilds our dev instance from nothing and the app passes its check.
 
+*As built (2026-11-06, written by DeepSeek from this part and reviewed):* `companion/`
+(`procraft-companion`). The pins (uv 0.12.1, Python 3.12, PyTorch 2.14.1 with the cu130, rocm7.2,
+xpu and cpu indexes, the ComfyUI and add-on commits of `dev/setup-dev-comfyui.sh`, and the Anima
+set's six files with sizes and SHA-256) are in `companion/src/pins.rs`, with a test that they satisfy
+`requirements.rs`. The models come from `circlestone-labs/Anima` (base, turbo, text encoder, VAE)
+and `kohya-ss/Anima-LLLite` on Hugging Face; the dev instance's hand-copied files are the same
+bytes. `install --dry-run` prints every step and command. A fresh install marks its folder
+(`.companion-installing`) before anything else, so one that stops part-way can be run again; the
+mark goes when `companion.json` is written. `check` on a folder notes a missing `companion.json`
+rather than failing, and judges readiness by the features. Ctrl+C reaches ComfyUI through two small
+platform calls (the companion's only `unsafe`). **Windows is written to the same plan but untested**:
+there's no Windows machine here; it waits for someone to try it and report. Still to do for
+acceptance: a real `install` and `models anima` into an empty folder, then `start` and the app's
+check against it.
+
 ---
 
 # Part D — Testing and plan
@@ -792,7 +807,7 @@ it is accepted when it rebuilds our dev instance from nothing and the app passes
 | **M3 Selections** | selection graphs + modes; mode guess; Selection toolbar button; tuning grow/blur/colour match on real pictures |
 | **M4 Control layers + autocomplete** | engine `control` property; layer menu row + badge; popover rows; control image preparation; tag files, index, suggestion strip, recent prompts |
 | **Results tray** ✅ (2026-11-06, before M5) | §A4 on both apps: tucking (⌄, a tap on the canvas, Esc) and the tray tab; the tray as an open panel for the canvas's touches; ↻ icon; ··· with "Use the seed" and "Clear all results…"; the note line; tested on the tablet (tap out, drag out, tab, run while tucked, other tools' bars) and on desktop |
-| **M5 Companion** | `procraft-companion` install / models / check / start / stop; model list with hashes; Windows pass; rebuild the dev instance with it |
+| **M5 Companion** | `procraft-companion` install / models / check / start / stop; model list with hashes; Windows written but untested (no Windows machine; reports welcome when released); rebuild the dev instance with it |
 
 ### M2 as delivered (2026-11-05)
 
