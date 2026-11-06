@@ -13,7 +13,7 @@ use crate::installed;
 
 /// Runs ComfyUI from `dir` and waits for it; the companion exits with ComfyUI's code.
 pub fn start(dir: &Path, port: u16, lan: bool) -> Result<ExitCode, String> {
-    installed::read(dir)?;
+    installed::read(dir).map_err(|e| format!("{e}\nrun install first, or pass --dir to the folder it made"))?;
 
     let main = canonical(install::comfyui_dir(dir).join("main.py"));
     if !main.is_file() {
@@ -48,6 +48,9 @@ pub fn start(dir: &Path, port: u16, lan: bool) -> Result<ExitCode, String> {
     }
 
     let mut child = command.spawn().map_err(|e| format!("{}: {e}", python.display()))?;
+    // Ctrl+C goes to the whole process group, so ComfyUI gets it too; leaving it alone here would
+    // end the companion first, before it could wait for ComfyUI or remove the pid file.
+    ignore_interrupt();
     if let Err(e) = fs::write(&pid_file, format!("{}\n", child.id())) {
         let _ = child.kill();
         let _ = child.wait();
@@ -205,6 +208,40 @@ fn taskkill(pid: u32, force: bool) -> Result<(), String> {
     }
     let status = command.status().map_err(|e| format!("taskkill /PID {pid}: {e}"))?;
     if status.success() { Ok(()) } else { Err(format!("taskkill /PID {pid}: {status}")) }
+}
+
+/// Ignore Ctrl+C in the companion, so it can wait for ComfyUI and leave with its exit code. The
+/// terminal sends the signal to the whole process group, so the child stops too; this runs after it
+/// starts, so the child keeps the default behaviour.
+#[cfg(unix)]
+#[allow(unsafe_code)] // std has no signal handling: this is the only platform call needed
+fn ignore_interrupt() {
+    // SIGINT is 2 and SIG_IGN is 1 on every Unix the companion runs on.
+    unsafe extern "C" {
+        fn signal(signum: i32, handler: usize) -> usize;
+    }
+    // SAFETY: `signal` only records a disposition for this process, and the two constants are the
+    // C library's own.
+    unsafe {
+        signal(2, 1);
+    }
+}
+
+/// Ignore Ctrl+C in the companion, so it can wait for ComfyUI and leave with its exit code. Windows
+/// sends the event to every process attached to the console, so the child stops too; this runs
+/// after it starts, because the ignore flag would otherwise be inherited by it.
+#[cfg(windows)]
+#[allow(unsafe_code)] // std has no console handling: this is the one platform call
+fn ignore_interrupt() {
+    use std::ffi::c_void;
+    unsafe extern "system" {
+        fn SetConsoleCtrlHandler(handler: *const c_void, add: i32) -> i32;
+    }
+    // SAFETY: a null handler with `add` set to 1 is the documented way to ignore Ctrl+C for this
+    // process; the return value only says whether it worked.
+    unsafe {
+        SetConsoleCtrlHandler(std::ptr::null(), 1);
+    }
 }
 
 /// The machine's LAN address: found by asking the routing table where a public address would go,

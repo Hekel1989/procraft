@@ -173,15 +173,15 @@ fn install_requirements(
     dry_run: bool,
 ) -> Result<(), String> {
     if !requirements.is_file() {
-        if dry_run && required {
-            // ComfyUI's archive always has one, even though this dry run didn't unpack it
-            println!("== {name} requirements");
+        if dry_run {
+            // the archive wasn't unpacked, so only ComfyUI's is known to have one
+            println!("== {name} requirements{}", if required { "" } else { " (if present)" });
             return run_uv(dir, &requirements_args(dir, requirements), dry_run);
         }
         if required {
             return Err(format!("{}: missing", requirements.display()));
         }
-        println!("== {name} requirements ({})", if dry_run { "if present" } else { "none" });
+        println!("== {name} requirements (none)");
         return Ok(());
     }
     println!("== {name} requirements");
