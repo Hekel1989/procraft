@@ -22,6 +22,12 @@ pub fn run(dir: &Path, gpu: Option<Gpu>, dry_run: bool) -> Result<(), String> {
     }
     if !dry_run {
         fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        // a fresh install marks the folder as ours first, so one that stops part-way can be run again
+        if recorded.is_none() {
+            let marker = dir.join(installed::UNFINISHED);
+            fs::write(&marker, "an install started here and hasn't finished\n")
+                .map_err(|e| format!("{}: {e}", marker.display()))?;
+        }
     }
 
     install_uv(dir, recorded.as_ref(), dry_run)?;
@@ -45,6 +51,10 @@ pub fn run(dir: &Path, gpu: Option<Gpu>, dry_run: bool) -> Result<(), String> {
             uv_version: pins::UV_VERSION.to_owned(),
         };
         installed::write(dir, &installed)?;
+        let marker = dir.join(installed::UNFINISHED);
+        if marker.exists() {
+            fs::remove_file(&marker).map_err(|e| format!("{}: {e}", marker.display()))?;
+        }
     }
 
     print_next(dir);
@@ -58,6 +68,10 @@ fn check_dir(dir: &Path) -> Result<Option<Installed>, String> {
         Ok(_) => {
             if let Ok(installed) = installed::read(dir) {
                 return Ok(Some(installed));
+            }
+            // an install of ours that stopped part-way: it carries on from the start
+            if installed::unfinished(dir) {
+                return Ok(None);
             }
             let mut entries = fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
             match entries.next() {
@@ -463,6 +477,20 @@ fn make_executable(_path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_unfinished_install_is_carried_on_and_a_stranger_s_folder_refused() {
+        let dir = std::env::temp_dir().join(format!("procraft-companion-unfinished-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("uv")).unwrap();
+        // something in it, and no sign it's ours: refused
+        assert!(check_dir(&dir).is_err());
+        // the marker a fresh install writes first: carried on from the start
+        fs::write(dir.join(installed::UNFINISHED), "").unwrap();
+        assert_eq!(check_dir(&dir).unwrap(), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     use super::*;
     use std::collections::BTreeMap;
     use std::io::Write;

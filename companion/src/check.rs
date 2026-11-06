@@ -86,7 +86,11 @@ fn check_folder(dir: &Path, verify: bool) -> Result<bool, String> {
 /// Notes what `companion.json` says; versions never decide readiness, only the features do.
 fn check_installed(dir: &Path) {
     if !installed::exists(dir) {
-        println!("ℹ not installed by the companion: checked as it is");
+        if installed::unfinished(dir) {
+            println!("✕ an install started here and didn't finish: run install again");
+        } else {
+            println!("ℹ not installed by the companion: checked as it is");
+        }
         return;
     }
     match installed::read(dir) {

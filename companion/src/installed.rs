@@ -54,6 +54,16 @@ impl Installed {
     }
 }
 
+/// Written into a folder before a fresh install puts anything in it, and removed when
+/// `companion.json` is written: a folder with it is one an install started and didn't finish, so
+/// running `install` again carries on there rather than refusing it.
+pub const UNFINISHED: &str = ".companion-installing";
+
+/// Whether an install started in `dir` and didn't finish.
+pub fn unfinished(dir: &Path) -> bool {
+    dir.join(UNFINISHED).is_file()
+}
+
 /// Whether `dir` holds a companion.json.
 pub fn exists(dir: &Path) -> bool {
     dir.join(FILE).is_file()
